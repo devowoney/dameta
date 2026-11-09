@@ -1,0 +1,10 @@
+# Secrets
+.env
+# Environments
+.venv/
+__pycache__/
+*.pyc
+# Ephemeral workbench (disposable per project spec)
+tmp/
+# Agent worktrees
+.claude/worktrees/
