@@ -15,3 +15,9 @@
 | 2026-11-09 | Emulator error = intrinsic + deliberate degradation; metric = gap-closure ratio | Pilot; controlled, reproducible model error |
 | 2026-11-09 | Git commit/push reserved to user; agent touches git only on explicit request | Pilot rule |
 | 2026-11-09 | Each development -> publication-ready markdown update (findings.md) | Paper target |
+| 2026-11-09 | Seeded generated data; emulator trained on same trajectories; split by IC | Pilot; reproducibility |
+| 2026-11-09 | Test ICs excluded from emulator and meta training | Avoid leakage in generalization claim |
+| 2026-11-09 | Behavioral rules 1-7 adopted (SLURM approval, gradient checks, reproducibility, integrity, stack, tone, no-unasked actions) | Pilot confirmed |
+| 2026-11-10 | Meta-B = bice Δ inner-loss mechanism; Meta-A = free K-step unrolled rule with dynamics calls, loss J(x0^K) | Resolves A/B distinction from reference code |
+| 2026-11-10 | Port bice optimization/Hydra/SLURM/delta-chain into src/, adapted to L63 MLP | Pilot authorized; reuse prior work |
+| 2026-11-10 | Plan v0 + DA config v0 approved | Pilot sign-off |
