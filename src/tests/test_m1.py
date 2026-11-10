@@ -18,6 +18,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # src/ on the path
 
 from dameta.data import DataConfig, generate_split, split_seeds  # noqa: E402
+from dameta.data.generate import region_radius  # noqa: E402
 from dameta.dynamics import L63Model, L63Params, l63_jacobian, l63_tendency  # noqa: E402
 
 torch.set_default_dtype(torch.float64)
@@ -126,7 +127,7 @@ def test_reproducibility_and_splits():
     same = all(np.array_equal(a[v].values, b[v].values) for v in ["x_true", "y_obs", "x0_b"])
     report("reproducibility (same seed, bit-identical)", 0.0 if same else 1.0, "== 0", same)
     seeds = split_seeds(42)
-    distinct = len(set(seeds.values())) == 3
+    distinct = len(set(seeds.values())) == len(seeds)  # one independent stream per split
     c = generate_split(5, "test", 42, cfg, P)
     gap = float(np.abs(a.x_true.values[:, 0] - c.x_true.values[:, 0]).min())
     report("train/test IC separation (min abs diff)", gap, "> 0 and distinct seeds", distinct and gap > 0)
@@ -148,6 +149,17 @@ def test_data_schema_and_statistics():
     zmin, zmax = float(ds.x_true.values[..., 2].min()), float(ds.x_true.values[..., 2].max())
     ok_att = 0.0 < zmin and zmax < 50.0 and np.isfinite(ds.x_true.values).all()
     report("truth on attractor (z range)", zmax, f"0 < z (min {zmin:.2f}) and z < 50", ok_att)
+
+
+def test_heldout_region():
+    """Held-out lobe-transition region: split membership by r_xy, and OOD ICs separated from training ICs."""
+    cfg = DataConfig()
+    tr = torch.tensor(generate_split(300, "train", 42, cfg, P).x_true.values[:, 0])
+    od = torch.tensor(generate_split(100, "test_ood", 42, cfg, P).x_true.values[:, 0])
+    ok = bool((region_radius(tr) >= cfg.ood_r_out).all() and (region_radius(od) < cfg.ood_r_in).all())
+    report("region membership train / test_ood", 0.0 if ok else 1.0, "== 0", ok)
+    dmin = torch.cdist(od, tr).min().item()
+    report("min dist test_ood IC to train IC", dmin, ">= ood_r_out - ood_r_in = 1", dmin >= cfg.ood_r_out - cfg.ood_r_in)
 
 
 if __name__ == "__main__":

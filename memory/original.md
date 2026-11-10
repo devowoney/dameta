@@ -126,7 +126,10 @@ d=3 (L63 state), p (obs per time), K (optimizer iterations), dt.
 | obs_mask | (t, var) bool | which variables observed at which times (defines H) |
 | x0_b | (ic, var) | background IC = x_true[t=0] + eps_b, eps_b ~ N(0,B) |
 | attrs | — | sigma, rho, beta, dt, L, F, seed, R, B, (Q), split, generator git-free version tag |
-Splits by IC: train / val / test (test ICs never seen by emulator or meta training).
+Splits by IC: train / val / test (in-distribution) + **test_ood** (held-out lobe-transition region, 2026-11-10):
+feature flag heldout_region; train/val/test ICs have r_xy = sqrt(x^2+y^2) >= 4.0, test_ood ICs r_xy < 3.0
+(gap = 1 background std). Test/test_ood ICs never seen by emulator or meta training.
+Secondary OOD axis (no new data): x-only obs pattern held out from training.
 
 ### D2 emulator  M2 — APPROVED 2026-11-10 (NN tendency + RK4)
 NN tendency + fixed RK4 integrator: dx/dt = h_phi(x), MLP 3→64→64→3, smooth activations (SiLU/tanh; no ReLU → smooth
@@ -152,6 +155,18 @@ Jacobian for gradient fidelity), RK4 at the same dt as M1. Trained on D1-train x
 - R = sigma_o^2 I, sigma_o^2 = 2. B = sigma_b^2 I, sigma_b = 1; x0_b = truth + N(0,B).
 - Strong: J = 1/2||x0-x0_b||^2_{B^-1} + 1/2 sum_t ||y_t - H M_{0->t}(x0)||^2_{R^-1}.
 - Weak: control (x0, eta_1..eta_10), eta added at obs times; J_q = 1/2 sum ||eta_i||^2_{Q^-1}, Q = sigma_q^2 I, sigma_q=0.1.
-- Forecast F = 500 steps beyond window. ICs: spin-up 1000 steps; train/val/test = 1000/200/200.
+- Forecast F = 500 steps beyond window. ICs: spin-up 1000 steps; train/val/test/test_ood = 1000/200/200/200.
 - Classical budget: <= 1000 iters or rel dJ < 1e-6; GD/Adagrad lr tuned on val.
 - Meta: K = 20 (bice default); meta budget <= 1/10 classical; Meta-A K-sweep {5,10,20,50}.
+
+## Memory protocol for branches / worktrees (pilot, 2026-11-10)
+- Each milestone/feature after M1 is developed in a git worktree under .claude/worktrees/<branch> on its own branch.
+  The user alone commits, pushes and merges.
+- Inside a worktree, do NOT edit the shared memory files (original.md, findings.md, progress.md, decisions.md,
+  task_plan.md). Write branch-local notes instead in `memory/branches/<branch>/`:
+    progress.md   — dated log of the branch
+    findings.md   — paper-ready entries produced on the branch (same style as findings.md)
+    decisions.md  — decision rows (same table columns as decisions.md)
+- New files never conflict at merge. After the user merges a branch into main, the agent (on request, on main) folds
+  the branch notes into the shared files and marks the branch folder "folded".
+- The main checkout keeps the shared files as the single source of truth for state between milestones.

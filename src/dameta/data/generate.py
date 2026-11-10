@@ -11,8 +11,15 @@ Output schema (xarray.Dataset, float64), one file per split: tmp/data/l63_<split
     attrs     sigma, rho, beta, dt, window L, forecast F, obs_every, sigma_o2, sigma_b, spinup, split, seed,
               split_seed, dameta version
 
+Held-out region (feature flag `heldout_region`, pilot decision 2026-11-10): the lobe-transition region near the
+z-axis, r_xy = sqrt(x^2 + y^2), is reserved for a harder out-of-distribution split:
+    train / val / test (in-distribution)  ->  initial conditions with r_xy >= ood_r_out
+    test_ood                              ->  initial conditions with r_xy <  ood_r_in
+The gap ood_r_in < r_xy < ood_r_out (default 3 -> 4, i.e. one background std) is never sampled, so no in-distribution
+IC lies within that distance of an OOD IC. Rejection sampling on spun-up states; the flag off = no filtering.
+
 Reproducibility: one master seed -> numpy SeedSequence.spawn() -> one independent stream per split
-(train / val / test). Within a split, a single torch.Generator draws, in a fixed order: IC seeds, background
+(train / val / test / test_ood). Within a split, a single torch.Generator draws, in a fixed order: IC seeds, background
 noise, observation noise. Same seed => bit-identical file content.
 """
 
@@ -25,7 +32,7 @@ import xarray as xr
 from .. import __version__
 from ..dynamics import L63Model, L63Params
 
-SPLITS = ("train", "val", "test")  # fixed order: defines which spawned stream each split gets
+SPLITS = ("train", "val", "test", "test_ood")  # fixed order: defines which spawned stream each split gets
 
 
 @dataclass(frozen=True)
@@ -39,12 +46,36 @@ class DataConfig:
     sigma_b: float = 1.0       # background-error std, B = sigma_b^2 * I
     spinup: int = 1000         # steps to bring random draws onto the attractor
     ic_init_std: float = 10.0  # std of the random pre-spin-up draw (centred on (0, 0, 25))
+    heldout_region: bool = True  # feature flag: reserve the lobe-transition region (small r_xy) for test_ood
+    ood_r_in: float = 3.0        # test_ood ICs: r_xy < ood_r_in   (~14% of the attractor measure)
+    ood_r_out: float = 4.0       # in-distribution ICs: r_xy >= ood_r_out   (~77%); gap = 1 background std
 
 
 def split_seeds(seed: int) -> dict:
     """Master seed -> independent integer seed per split (numpy SeedSequence, statistically independent streams)."""
     children = np.random.SeedSequence(seed).spawn(len(SPLITS))
     return {name: int(child.generate_state(1, dtype=np.uint64)[0] % (2**63 - 1)) for name, child in zip(SPLITS, children)}
+
+
+def region_radius(x: torch.Tensor) -> torch.Tensor:
+    """r_xy = distance to the z-axis; small values = lobe-transition region of Lorenz-63."""
+    return torch.hypot(x[..., 0], x[..., 1])
+
+
+def _sample_ics(n_ic: int, split: str, gen: torch.Generator, cfg: DataConfig, model: L63Model) -> torch.Tensor:
+    """Draw n_ic spun-up attractor states, restricted to the split's region when cfg.heldout_region is on."""
+    centre = torch.tensor([0.0, 0.0, 25.0], dtype=torch.float64)
+    batch = max(256, 4 * n_ic) if cfg.heldout_region else n_ic  # oversample when rejecting (OOD keeps ~14%)
+    kept, n_kept = [], 0
+    while n_kept < n_ic:
+        x = model.final_state(centre + cfg.ic_init_std * torch.randn(batch, 3, generator=gen, dtype=torch.float64),
+                              cfg.spinup)
+        if cfg.heldout_region:
+            r = region_radius(x)
+            x = x[r < cfg.ood_r_in] if split == "test_ood" else x[r >= cfg.ood_r_out]
+        kept.append(x)
+        n_kept += x.shape[0]
+    return torch.cat(kept)[:n_ic]
 
 
 @torch.no_grad()
@@ -55,10 +86,9 @@ def generate_split(n_ic: int, split: str, seed: int, cfg: DataConfig, params: L6
     model = L63Model(params)
     dtype = torch.float64
 
-    # 1) Initial conditions on the attractor: random draw around the attractor centre, then spin-up.
-    centre = torch.tensor([0.0, 0.0, 25.0], dtype=dtype)
-    x_init = centre + cfg.ic_init_std * torch.randn(n_ic, 3, generator=gen, dtype=dtype)
-    x0_true = model.final_state(x_init, cfg.spinup)
+    # 1) Initial conditions on the attractor: random draw around the attractor centre, then spin-up,
+    #    then (if heldout_region) keep only states in the region assigned to this split (rejection sampling).
+    x0_true = _sample_ics(n_ic, split, gen, cfg, model)
 
     # 2) Background = truth + N(0, sigma_b^2 I)
     x0_b = x0_true + cfg.sigma_b * torch.randn(n_ic, 3, generator=gen, dtype=dtype)
@@ -95,6 +125,8 @@ def generate_split(n_ic: int, split: str, seed: int, cfg: DataConfig, params: L6
             **{k: float(v) for k, v in asdict(params).items()},
             **{k: (float(v) if isinstance(v, float) else int(v)) for k, v in asdict(cfg).items()},
             "split": split,
+            "region": ("ood: r_xy < ood_r_in" if split == "test_ood" else "in-dist: r_xy >= ood_r_out")
+                      if cfg.heldout_region else "none",
             "seed": int(seed),
             "split_seed": int(s_seed),
             "dameta_version": __version__,

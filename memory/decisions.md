@@ -21,3 +21,6 @@
 | 2026-11-10 | Meta-B = bice Δ inner-loss mechanism; Meta-A = free K-step unrolled rule with dynamics calls, loss J(x0^K) | Resolves A/B distinction from reference code |
 | 2026-11-10 | Port bice optimization/Hydra/SLURM/delta-chain into src/, adapted to L63 MLP | Pilot authorized; reuse prior work |
 | 2026-11-10 | Plan v0 + DA config v0 approved | Pilot sign-off |
+| 2026-11-10 | Harder held-out test = lobe-transition region r_xy<3 (test_ood), in-dist r_xy>=4; x-only obs as secondary OOD | Pilot asked for harder test; test ICs were within 0.033 of train ICs |
+| 2026-11-10 | Held-out region split kept on main; M2 onward developed in git worktrees (branch per milestone) | Pilot; isolate milestone work, user merges |
+| 2026-11-10 | Branch memory in memory/branches/<branch>/; shared memory files edited on main only | Avoid merge conflicts on append-only memory files |

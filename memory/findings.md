@@ -171,3 +171,19 @@ Test cases are distinct trajectories, but on the low-dimensional attractor they 
 cases, so "unseen IC" is an **interpolation** test. A harder out-of-distribution split (e.g. region of the attractor
 held out, different ρ, or x-only obs pattern unseen in training) may be needed to make the Meta-B vs Meta-A
 generalization claim convincing. → decision for pilot.
+
+### Held-out region split (harder generalization test, 2026-11-10)
+To turn "unseen initial conditions" into an extrapolation test, the lobe-transition region of the attractor
+(states near the z-axis, r_xy = √(x² + y²) < 3, ≈ 14 % of the invariant measure) is withheld from training and
+used only in a separate split `test_ood`. In-distribution splits (train / val / test) draw initial conditions from
+r_xy ≥ 4 only, so a gap of one background-error standard deviation separates the two populations. The region is
+dynamically the most sensitive part of Lorenz-63 (regime switching between lobes), so it is harder as well as unseen.
+A secondary out-of-distribution axis needs no new data: the x-only observation pattern withheld from training.
+
+| Split | n | r_xy of ICs | nearest train IC: min / median |
+|---|---|---|---|
+| test (in-dist) | 200 | [4.03, 26.11] | 0.033 / 0.551 |
+| test_ood | 200 | [0.00, 3.00] | **1.158 / 2.973** |
+
+Verification: src/tests/test_m1.py now 13/13 (adds region membership and OOD separation ≥ 1). Data regenerated
+(tmp/data/l63_{train,val,test,test_ood}_seed42.nc); figure tmp/figs/m1_ic_split.{png,pdf} shows the region.

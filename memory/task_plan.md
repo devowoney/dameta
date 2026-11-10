@@ -1,6 +1,7 @@
 # Task Plan
 
 ## Done
+- [x] Held-out region split test_ood (2026-11-10)
 - [x] Scaffold; Phase A (M-O-R); Phase B.1 (5 questions); B.2 prior art; bice reference read + mapped
 
 ## Phase C implementation plan v0 (2026-11-10) — APPROVED by pilot 2026-11-10
@@ -20,5 +21,5 @@ Layout (everything code under src/; artifacts to tmp/):
   src/tests/                        adjoint dot-product, FD vs AD (M2), s=0 chain == one teacher step, reproducibility
 Milestones:
   M1 L63 + data gen + gradient tests [DONE]    M4 Meta-B (port): E2-B, E4-B
-  M2 classical strong/weak 4D-Var: E1          M5 Meta-A: E2-A, E4-A
+  M2 classical strong/weak 4D-Var: E1 [branch m2-classical-4dvar]          M5 Meta-A: E2-A, E4-A
   M3 emulator train + E3 + G1                  M6 metrics, figures, SLURM sweeps, findings.md entry per milestone

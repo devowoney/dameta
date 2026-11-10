@@ -15,11 +15,15 @@ data:
   sigma_b: 1.0                 # B = sigma_b^2 * I
   spinup: 1000
   ic_init_std: 10.0
+  heldout_region: true         # feature flag: lobe-transition region (r_xy = sqrt(x^2+y^2) small) reserved for test_ood
+  ood_r_in: 3.0                # test_ood ICs: r_xy < 3.0
+  ood_r_out: 4.0               # train/val/test ICs: r_xy >= 4.0 (gap = 1 background std)
 
 n_ic:                          # number of initial conditions per split (split by IC; test never used in training)
   train: 1000
   val: 200
-  test: 200
+  test: 200                    # in-distribution test
+  test_ood: 200                # held-out lobe-transition region (harder generalization test)
 
 out_dir: ${project_root:}/tmp/data   # all outputs stay in tmp/ until the pilot authorizes run/
 

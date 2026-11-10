@@ -24,3 +24,7 @@
 - 2026-11-10: bice optimizer/Hydra/SLURM surveyed; implementation plan v0 in task_plan.md; DA default proposal sent.
 - 2026-11-10: Plan v0 + DA config approved. Milestone 1 started (L63, data gen, gradient tests).
 - 2026-11-10: Milestone 1 DONE. src/dameta/{dynamics/l63.py,data/generate.py}, src/gen_data.py, src/configs/gen_data.yaml, src/tests/test_m1.py (11/11 pass). D1 in tmp/data (seed 42). Lyapunov 0.904±0.012. Flag: test ICs within 0.033 of train ICs (interpolation).
+- 2026-11-10: Added held-out region split test_ood (flag heldout_region); data regenerated (4 splits); tests 13/13. Memory updated.
+- 2026-11-10: Pilot decision: held-out split stays on main; Milestone 2 continues in git worktree branch
+  `m2-classical-4dvar` (.claude/worktrees/). Branch notes live in memory/branches/<branch>/ (see original.md
+  "Memory protocol"); shared memory files are edited on main only.
