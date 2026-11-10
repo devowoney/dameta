@@ -1,0 +1,32 @@
+# Classical 4D-Var run (E1 = physical L63; E3 = emulator from milestone 3) — DA configuration v0 (approved 2026-11-10)
+seed: 42                      # dataset master seed (selects tmp/data/l63_<split>_seed<seed>.nc)
+split: val                    # train | val | test | test_ood   (lr tuning on val only; never tune on test*)
+pattern: full                 # observation pattern: full | x_only
+constraint: strong            # strong | weak
+dynamics: l63                 # l63 (M1); emulator added in milestone 3
+method: gd                    # classical optimizer / teacher: gd | adagrad
+lr: 0.01
+max_iter: 1000                # classical budget (approved): <= 1000 iterations ...
+tol: 1.0e-6                   # ... or relative cost decrease below tol (per case)
+n_cases: null                 # null = all ICs of the split; int = first n (quick checks)
+
+cost:
+  window: 100
+  obs_every: 10
+  sigma_o2: 2.0
+  sigma_b: 1.0
+  sigma_q: 0.1
+forecast: 500                 # F, steps beyond the window
+
+data_dir: ${project_root:}/tmp/data
+out_dir: ${project_root:}/tmp/results/e1
+exp_name: ${constraint}_${pattern}_${method}_lr${lr}_${split}
+
+hydra:
+  run:
+    dir: ${project_root:}/tmp/hydra/fourdvar/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${project_root:}/tmp/hydra/fourdvar_sweep/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false
