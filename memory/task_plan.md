@@ -2,6 +2,7 @@
 
 ## Done
 - [x] Held-out region split test_ood (2026-11-10)
+- [x] M2 classical 4D-Var E1 (merged 2026-11-10; lr: Adagrad 0.1, GD 1e-3 strong / 3e-4 weak)
 - [x] Scaffold; Phase A (M-O-R); Phase B.1 (5 questions); B.2 prior art; bice reference read + mapped
 
 ## Phase C implementation plan v0 (2026-11-10) — APPROVED by pilot 2026-11-10
@@ -21,5 +22,5 @@ Layout (everything code under src/; artifacts to tmp/):
   src/tests/                        adjoint dot-product, FD vs AD (M2), s=0 chain == one teacher step, reproducibility
 Milestones:
   M1 L63 + data gen + gradient tests [DONE]    M4 Meta-B (port): E2-B, E4-B
-  M2 classical strong/weak 4D-Var: E1 [branch m2-classical-4dvar]          M5 Meta-A: E2-A, E4-A
-  M3 emulator train + E3 + G1                  M6 metrics, figures, SLURM sweeps, findings.md entry per milestone
+  M2 classical strong/weak 4D-Var: E1 [DONE, merged]    M5 Meta-A: E2-A, E4-A
+  M3 emulator train + E3 + G1 [NEXT, branch m3-emulator]  M6 metrics, figures, SLURM sweeps, findings.md entry per milestone

@@ -11,9 +11,9 @@ Data-First · Surgical Changes · Simplicity First · Goal-Driven · explore →
 ## Phase status
 | Phase | Status |
 |---|---|
-| A – Architect (M-O-R) | DONE 2026-11-09 (open: g_theta inputs, await reference code) |
-| B – Blueprint (North Star, Integrations, Source of Truth, Payload, Rules) | B.1 DONE 2026-11-09; B.2 research + data schema IN PROGRESS |
-| C – Copilot | not started |
+| A – Architect (M-O-R) | DONE 2026-11-09 (g_theta inputs resolved from bice reference 2026-11-10) |
+| B – Blueprint (North Star, Integrations, Source of Truth, Payload, Rules) | DONE 2026-11-10 (plan v0 + DA config v0 approved) |
+| C – Copilot | IN PROGRESS — M1 done, M2 done (merged), next M3 |
 
 ## M-O-R (scientific layer) — TO BE FILLED WITH PILOT
 ### Motivation
@@ -77,8 +77,12 @@ Obs operator, assimilation window, cost function, B/R/Q etc.: to be defined with
   - **Scientific claim (real North Star):** "meta learner can re-learn missing dynamics of emulator and Meta-B beats
     Meta-A on generalization with delta inner loss meta task".
   - **Quantitative gate:** on held-out L63 initial conditions, a meta optimizer reaches forecast RMSE (beyond window)
-    within **X = 5%** of classical GD 4D-Var using **<= 1/N, N = 10x** model+gradient evaluations, with G2 > 0,
+    within **X = 5%** of classical 4D-Var using **<= 1/N, N = 10x** model+gradient evaluations, with G2 > 0,
     P1 ~ classical, P3 >= classical; for M1 and M2, strong and weak constraint.
+  - **Cost-gate reference (pilot, 2026-11-10):** report vs BOTH classical GD and Adagrad; the claim is anchored on
+    Adagrad (strongest classical baseline). Cost = gradient evaluations to reach J <= 1.01 J* (J* = best final J per
+    case). E1 targets for meta (<= 1/10 Adagrad): ~7 evals strong/full test, ~14 weak/full test, ~13 strong/full
+    test_ood (GD-referenced targets ~26 / 62 / 22 reported alongside).
   - "Missing dynamics" = BOTH intrinsic emulator imperfection (finite data/capacity) AND deliberate controlled
     degradation (e.g. dropped term, perturbed sigma/rho/beta, coarser dt).
   - Re-learning measured by **gap-closure ratio** = (RMSE_E3 - RMSE_E4) / (RMSE_E3 - RMSE_E1)
