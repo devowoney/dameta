@@ -10,3 +10,4 @@
   x 200 cases (24 runs), 0 diverged. report_e1.py -> tmp/results/e1/summary.{csv,md}, evals_to_target.csv,
   tmp/figs/m2_e1_{forecast_rmse,convergence}.{png,pdf}. Tests: M1 13/13, M2 8/8. Milestone 2 DONE (pending pilot
   review). Open: which baseline anchors the 10x cost gate (GD vs Adagrad).
+- 2026-11-10: Pilot: report cost gate vs GD and Adagrad; claim anchored on Adagrad (recorded in branch decisions/findings).

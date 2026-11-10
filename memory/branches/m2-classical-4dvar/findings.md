@@ -78,6 +78,8 @@ Figures: tmp/figs/m2_e1_forecast_rmse.{png,pdf}, tmp/figs/m2_e1_convergence.{png
    (1 + tol) J*" is the fair cost measure for the North Star gate. Wall-clock is batch-level (≈ 0.5 s per case per
    1000 iterations on CPU) and not per-case; it will be reported per configuration.
 
-### Open point for the pilot
-North Star cost gate "≤ 1/10 of classical GD 4D-Var evaluations": vs GD (teacher) the target is ≈ 26 evals
-(strong/full test); vs the strongest classical baseline (Adagrad) it is ≈ 7 evals. Which reference anchors the gate?
+### Cost-gate reference (resolved by pilot, 2026-11-10)
+The North Star cost gate is reported against both classical optimizers, and the claim is anchored on the strongest
+one, Adagrad: a meta optimizer must reach J ≤ 1.01 J* in ≤ 1/10 of Adagrad's gradient evaluations (≈ 7 vs 70 for
+strong/full test; ≈ 14 vs 138 weak/full; ≈ 13 vs 125 strong/full test_ood). GD targets (≈ 26 / 62 / 22) are reported
+alongside.

@@ -8,3 +8,4 @@
 | 2026-11-10 | lr sweep on first 50 val cases (CPU, 4 cores shared); chosen lr re-run on full val/test/test_ood | Login node limits; SLURM needs pilot OK |
 | 2026-11-10 | Final lr: Adagrad 0.1 (all); GD 0.001 (strong), 3e-4 (weak) | Pre-registered rule on val sweep |
 | 2026-11-10 | Cost metric = gradient evaluations to reach J <= (1+tol) J*, tol 1 % and 5 % (J* = best final J per case) | Curves plateau before the 1e-6 stopping rule |
+| 2026-11-10 | North Star cost gate: report vs BOTH GD and Adagrad; the claim (<= 1/10 evals) is anchored on Adagrad, the strongest classical baseline (target ~7 evals to 1 % of J*, strong/full test) | Pilot decision; reviewers expect the strongest baseline. FOLD INTO original.md North Star on main after merge |
