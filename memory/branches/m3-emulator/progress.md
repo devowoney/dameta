@@ -12,3 +12,5 @@
 - 2026-11-10: Pilot chose B' (xz 0.95) main, B (xz 0.9) stress. Training emulators xz095, xz090.
 - 2026-11-10: Emulators trained: xz095 (best val 0.0304 vs its teacher, 707 s), xz090 (0.0337, 702 s). lr sweeps running.
 - 2026-11-10: Degraded emulators xz095/xz090 diagnostics + E3 final (16 + 8 runs, 0 diverged). report_e3 fixed to pair with E1 by configuration (lr may differ). Large gaps (2.09 / 3.77 @1TU). Found Q mis-specification for degraded emulators -> pilot decision.
+- 2026-11-11: Pilot committed m3-emulator; decided to keep Q fixed (sigma_q = 0.1). Milestone 3 closed.
+- 2026-11-11: Consolidated IC-estimation report: src/report_ic.py -> tmp/report (3 tables with bootstrap CIs + paired Wilcoxon, 3 figures, CVD-validated palette). Paper-ready section appended to branch findings.
