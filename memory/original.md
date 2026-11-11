@@ -13,7 +13,7 @@ Data-First · Surgical Changes · Simplicity First · Goal-Driven · explore →
 |---|---|
 | A – Architect (M-O-R) | DONE 2026-11-09 (g_theta inputs resolved from bice reference 2026-11-10) |
 | B – Blueprint (North Star, Integrations, Source of Truth, Payload, Rules) | DONE 2026-11-10 (plan v0 + DA config v0 approved) |
-| C – Copilot | IN PROGRESS — M1 done, M2 done (merged), next M3 |
+| C – Copilot | IN PROGRESS — M1, M2, M3 done (merged; consolidated E1/E3 report); next M4 (Meta-B) |
 
 ## M-O-R (scientific layer) — TO BE FILLED WITH PILOT
 ### Motivation
@@ -87,6 +87,10 @@ Obs operator, assimilation window, cost function, B/R/Q etc.: to be defined with
     degradation (e.g. dropped term, perturbed sigma/rho/beta, coarser dt).
   - Re-learning measured by **gap-closure ratio** = (RMSE_E3 - RMSE_E4) / (RMSE_E3 - RMSE_E1)
     (0 = no gain over emulator 4D-Var, 1 = recovers true-model 4D-Var); supported by G2 vs true M1 gradient.
+  - **Emulators & gap-closure denominators (M3, 2026-11-11):** clean (control), **xz095** = teacher with 5 % of the
+    -xz term of dy/dt removed (MAIN), **xz090** = 10 % removed (STRESS). Median paired gap E3 - E1 in forecast RMSE
+    at 1 TU (strong/full, Adagrad): clean 0.035 (control only), xz095 2.09 test / 0.66 test_ood, xz090 3.77 / 2.09.
+    Confound: the missing term scales with x, so test_ood (near z-axis) is less affected by this model error.
   - "Delta inner loss meta task" = bice Δ inner-loss mode (teacher-step stretch chain + first-order ΔJ meta loss);
     see findings.md "Reference implementation". This IS the Meta-B mechanism.
 - Integrations (pilot, 2026-11-09): **SLURM GPU** (compute), **TensorBoard** (tracking), **local git only** (no remote).
@@ -135,7 +139,7 @@ feature flag heldout_region; train/val/test ICs have r_xy = sqrt(x^2+y^2) >= 4.0
 (gap = 1 background std). Test/test_ood ICs never seen by emulator or meta training.
 Secondary OOD axis (no new data): x-only obs pattern held out from training.
 
-### D2 emulator  M2 — APPROVED 2026-11-10 (NN tendency + RK4)
+### D2 emulator  M2 — APPROVED 2026-11-10 (NN tendency + RK4); BUILT M3: tmp/emulators/{clean,xz095,xz090}.pt
 NN tendency + fixed RK4 integrator: dx/dt = h_phi(x), MLP 3→64→64→3, smooth activations (SiLU/tanh; no ReLU → smooth
 Jacobian for gradient fidelity), RK4 at the same dt as M1. Trained on D1-train x_true, multi-step rollout loss
 (n_roll ~10). Degradation flag: e.g. h_phi = known-partial-L63 + NN trained with a term removed / wrong rho.
@@ -159,6 +163,7 @@ Jacobian for gradient fidelity), RK4 at the same dt as M1. Trained on D1-train x
 - R = sigma_o^2 I, sigma_o^2 = 2. B = sigma_b^2 I, sigma_b = 1; x0_b = truth + N(0,B).
 - Strong: J = 1/2||x0-x0_b||^2_{B^-1} + 1/2 sum_t ||y_t - H M_{0->t}(x0)||^2_{R^-1}.
 - Weak: control (x0, eta_1..eta_10), eta added at obs times; J_q = 1/2 sum ||eta_i||^2_{Q^-1}, Q = sigma_q^2 I, sigma_q=0.1.
+  sigma_q kept FIXED at 0.1 for every emulator (pilot 2026-11-11), although 4-18x below the degraded emulators' error.
 - Forecast F = 500 steps beyond window. ICs: spin-up 1000 steps; train/val/test/test_ood = 1000/200/200/200.
 - Classical budget: <= 1000 iters or rel dJ < 1e-6; GD/Adagrad lr tuned on val.
 - Meta: K = 20 (bice default); meta budget <= 1/10 classical; Meta-A K-sweep {5,10,20,50}.
