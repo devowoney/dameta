@@ -29,8 +29,8 @@ Changes vs bice (L63 port; rows in memory/branches/m4-meta-b/decisions.md):
     - state input x_std = (c - climatological mean) / std (x0 block: train-truth statistics; eta block: 0 / sigma_q)
     - no ocean mask, no activation checkpointing (d <= 33), no forward-model call for reporting (the next outer
       gradient evaluation returns J(c^{k+1}) anyway)
-    - l_reg = lambda * (lambda * sum(theta^2) / n_theta) as in bice (lambda applied twice) behind flag
-      `reg_square_lambda` (default True = faithful port; pilot to confirm intent)
+    - l_reg = lambda * sum(theta^2) / n_theta (bice applies lambda twice = lambda^2: a bug per pilot 2026-11-11, fixed)
+All hyper-parameters are adjustable (MetaBConfig <- Hydra config src/configs/meta_b.yaml); select on val only.
 """
 
 import copy
@@ -58,8 +58,7 @@ class MetaBConfig:
     grad_trans_steps: int = 2       # TRANS meta-steps (then PERF)
     w_align: float = 1.0
     w_perf_delta: float = 2.5
-    lambda_reg: float = 1e-4
-    reg_square_lambda: bool = True  # bice: lambda applied twice
+    lambda_reg: float = 1e-4        # l_reg = lambda_reg * mean(theta^2)
     meta_lr: float = 1e-3
     grad_clip_norm: float = 1.0
 
@@ -130,7 +129,7 @@ class MetaB:
             self.opt.zero_grad()
             l_align = self.stretch(c, g_std, k).pow(2).mean()
             sq = sum(p.pow(2).sum() for p in params) / n_params
-            l_reg = cfg.lambda_reg * (cfg.lambda_reg * sq if cfg.reg_square_lambda else sq)
+            l_reg = cfg.lambda_reg * sq
             l_meta = l_reg + (cfg.w_align * l_align if phase in ("ALIGN", "TRANS") else 0.0)
             if phase in ("TRANS", "PERF"):
                 total = prev["c"] - self.chain(prev["c"], prev["g_std"], prev["f"], prev["k"])

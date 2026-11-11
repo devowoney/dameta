@@ -26,9 +26,10 @@ class IterationEmbedding(nn.Module):
         self.net = nn.Sequential(nn.Linear(1, dim), nn.SiLU(), nn.Linear(dim, dim))
 
     def forward(self, k: Union[int, torch.Tensor], n: int) -> torch.Tensor:
-        """Return [n, dim] (the same outer iteration k for every case of the batch)."""
+        """Return [n, dim]. k: scalar (same outer iteration for the whole batch) or [n] (one k per sample)."""
         w = self.net[0].weight
-        k = torch.as_tensor(k, dtype=w.dtype, device=w.device).reshape(1, 1)
+        k = torch.as_tensor(k, dtype=w.dtype, device=w.device)
+        k = k.reshape(1, 1) if k.numel() == 1 else k.reshape(n, 1)
         k = torch.log1p(k) if self.log_input else k
         return self.net(k).expand(n, -1)
 
@@ -55,3 +56,25 @@ class StretchNet(nn.Module):
         h = torch.cat([x_std, g_std, self.emb(k, x_std.shape[0])], dim=1)
         out = self.head(self.body(h))
         return self.output_scale * torch.tanh(out / self.output_scale)
+
+
+class GradNet(nn.Module):
+    """
+    Supervised Meta-B network (pilot 2026-11-11): G_theta(x_std, emb(k)) -> predicted running gradient, in
+    standardised units (multiply by the per-component gradient scale of the training pairs). Inputs = running
+    state + iteration embedding ONLY (no gradient, no observations). Unbounded linear output.
+    """
+
+    def __init__(self, d: int, hidden: int = 128, n_layers: int = 3, emb_dim: int = 8, log_k: bool = True):
+        super().__init__()
+        self.d = d
+        self.emb = IterationEmbedding(emb_dim, log_input=log_k)
+        layers, width = [], d + emb_dim
+        for _ in range(n_layers):
+            layers += [nn.Linear(width, hidden), nn.SiLU()]
+            width = hidden
+        self.body = nn.Sequential(*layers)
+        self.head = nn.Linear(width, d)
+
+    def forward(self, x_std: torch.Tensor, k: Union[int, torch.Tensor]) -> torch.Tensor:
+        return self.head(self.body(torch.cat([x_std, self.emb(k, x_std.shape[0])], dim=1)))

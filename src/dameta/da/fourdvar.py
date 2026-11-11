@@ -26,7 +26,8 @@ from .reference_step import ReferenceStep
 
 
 def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: float, max_iter: int = 1000,
-                 tol: float = 1e-6, eta_init: Optional[torch.Tensor] = None) -> dict:
+                 tol: float = 1e-6, eta_init: Optional[torch.Tensor] = None, on_step=None) -> dict:
+    """on_step(k, c, g, active): optional read-only hook before each move (M4: teacher trajectories for Meta-B)."""
     n = x0_init.shape[0]
     if cost.weak and eta_init is None:
         eta_init = torch.zeros(n, cost.cfg.n_obs - 1, 3, dtype=x0_init.dtype)   # first guess: perfect model
@@ -48,6 +49,8 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
             active = active * (~newly_done).to(c.dtype)
         if active.sum() == 0:
             break
+        if on_step is not None:
+            on_step(len(x0_hist) - 1, c, g, active)
         f = teacher(c, g, active)
         cos_hist.append(torch.nn.functional.cosine_similarity(f, g, dim=1))
         c = c - f

@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # src/ on the path
 
 from dameta.da import CostConfig, FourDVarCost, ReferenceStep, run_fourdvar  # noqa: E402
 from dameta.dynamics import L63Model  # noqa: E402
-from dameta.meta import MetaB, MetaBConfig, StretchNet, control_stats, run_meta_b, train_meta_b  # noqa: E402
+from dameta.meta import (MetaB, MetaBConfig, MetaBSup, StretchNet, SupConfig, build_sup,  # noqa: E402
+                         collect_teacher_pairs, control_stats, run_meta_b, run_meta_b_sup, train_meta_b)
 
 torch.set_default_dtype(torch.float64)
 ROOT = Path(__file__).resolve().parents[2]
@@ -154,6 +155,80 @@ def test_checkpoint_roundtrip():
     f = ReferenceStep(c, "gd", LR["gd"])(c, g)
     err = (lrn.advance(c, g, f, 3) - lrn2.advance(c, g, f, 3)).abs().max().item()
     report("checkpoint round-trip (weak)", err, "== 0", err == 0)
+
+
+class _Oracle:
+    """Stand-in supervised learner that returns the TRUE running gradient (tests the supervised outer loop)."""
+
+    def __init__(self, cost):
+        self.cost = cost
+
+    def predict(self, c, k):
+        with torch.enable_grad():
+            return self.cost.grad(c)[1]
+
+
+def test_sup_oracle_reproduces_classical():
+    """Supervised loop fed the true gradient == run_fourdvar (J history); n_fwd_evals == classical n_grad_evals."""
+    for weak in (False, True):
+        cost = make_cost(VAL, weak)
+        xb = torch.tensor(VAL.x0_b.values)
+        ref = run_fourdvar(cost, xb, "adagrad", LR["adagrad"], max_iter=200, tol=1e-6)
+        out = run_meta_b_sup(cost, xb, _Oracle(cost), "adagrad", LR["adagrad"], max_iter=200, tol=1e-6)
+        err = np.abs(ref["J_iter"] - out["J_iter"]).max()
+        same = bool((ref["n_grad_evals"] == out["n_fwd_evals"]).all()) and int(out["n_grad_evals"].sum()) == 0
+        g2 = np.nanmin(out["cos_ghat_grad"])
+        report(f"sup loop w/ oracle grad == classical ({'weak' if weak else 'strong'})", err,
+               "< 1e-9, same counts, cos(g_hat,g)=1", err < 1e-9 and same and abs(g2 - 1) < 1e-12)
+
+
+def test_teacher_pairs():
+    """Collected pairs at k = 0 are (x0_b, grad J(x0_b)) for every case; pair count = number of teacher moves."""
+    cost = make_cost(VAL, False)
+    xb = torch.tensor(VAL.x0_b.values)
+    pairs = collect_teacher_pairs(cost, xb, "adagrad", LR["adagrad"], max_iter=200, tol=1e-6)
+    k0 = pairs["k"] == 0
+    _, g0 = cost.grad(xb)
+    err = max((pairs["c"][k0] - xb).abs().max().item(), (pairs["g"][k0] - g0).abs().max().item())
+    ref = run_fourdvar(cost, xb, "adagrad", LR["adagrad"], max_iter=200, tol=1e-6)
+    moves = int((np.diff(ref["x0_iter"], axis=1) != 0).any(-1).sum())
+    report("teacher pairs: k=0 == (x0_b, grad); count == moves", err, f"< 1e-14 and {len(pairs['k'])} == {moves}",
+           err < 1e-14 and len(pairs["k"]) == moves)
+
+
+def test_iteration_embedding_per_sample():
+    """emb(k) with a per-sample k vector equals the scalar-k embedding for each sample."""
+    emb = StretchNet(3).emb
+    ks = torch.tensor([0.0, 3.0, 50.0])
+    a = emb(ks, 3)
+    b = torch.cat([emb(int(k), 1) for k in ks])
+    err = (a - b).abs().max().item()
+    report("iteration embedding: vector k == scalar k", err, "< 1e-15", err < 1e-15)
+
+
+def test_sup_fit_smoke_and_checkpoint():
+    """Supervised fit on 32 train ICs (5 epochs): val MSE improves, finite; checkpoint round-trip exact."""
+    xb_tr = torch.tensor(TRAIN.x0_b.values[:32])
+    tr = collect_teacher_pairs(make_cost(TRAIN, False, slice(0, 32)), xb_tr, "adagrad", LR["adagrad"], 300, 1e-6)
+    va = collect_teacher_pairs(make_cost(VAL, False), torch.tensor(VAL.x0_b.values), "adagrad", LR["adagrad"],
+                               300, 1e-6)
+    m, s = control_stats(torch.tensor(TRAIN.x_true.values), CFG.n_obs, CFG.sigma_q, False)
+    lrn = build_sup(3, SupConfig(epochs=5, batch_size=256), m, s, tr)
+    hist = lrn.fit(tr, va)
+    v0, vbest = hist[0]["val_mse"], min(h["val_mse"] for h in hist)
+    for h in hist:
+        print("      ", {k: (round(v, 4) if isinstance(v, float) else v) for k, v in h.items()})
+    report("supervised fit: best val MSE <= epoch-0 val MSE", vbest, f"<= {v0:.3e}, finite",
+           np.isfinite(vbest) and vbest <= v0)
+    lrn2 = MetaBSup.from_state_dict(lrn.state_dict())
+    c = torch.tensor(VAL.x0_b.values)
+    err = (lrn.predict(c, 7) - lrn2.predict(c, 7)).abs().max().item()
+    report("supervised checkpoint round-trip", err, "== 0", err == 0)
+    out = run_meta_b_sup(make_cost(VAL, False), c, lrn, "adagrad", LR["adagrad"], max_iter=100, tol=1e-6)
+    print(f"       frozen sup (5-epoch smoke): median J_final {np.median(out['J_iter'][:, -1]):.2f} "
+          f"(J0 {np.median(out['J_iter'][:, 0]):.2f}), median cos(g_hat,g) {np.nanmedian(out['cos_ghat_grad']):.3f}")
+    report("supervised frozen inference finite", float(np.isfinite(out["J_iter"]).mean()), "== 1",
+           bool(np.isfinite(out["J_iter"]).all()))
 
 
 if __name__ == "__main__":

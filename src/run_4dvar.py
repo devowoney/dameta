@@ -72,7 +72,13 @@ def run(cfg: DictConfig) -> xr.Dataset:
     cost = FourDVarCost(step, y, mask, x0_b, ccfg, weak=(cfg.constraint == "weak"))
 
     res = run_fourdvar(cost, x0_b, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
+    return analysis_record(cfg, ds, step, cost, res, "E1" if cfg.dynamics == "l63" else f"E3:{cfg.emulator}")
 
+
+def analysis_record(cfg: DictConfig, ds: xr.Dataset, step, cost: FourDVarCost, res: dict, configuration: str):
+    """D3 record from an optimizer result (shared by E1/E3 classical and E2/E4 meta runs, M4)."""
+    ccfg, y, x0_b = cost.cfg, cost.y, cost.x0_b
+    mask = cost.mask.bool()
     # Forecast skill beyond the window (truth at t = L .. L + F), from the analysis and from the background.
     x_true = ds.x_true.values
     L, F = ccfg.window, int(cfg.forecast)
@@ -105,7 +111,7 @@ def run(cfg: DictConfig) -> xr.Dataset:
         coords={"ic": ds.ic.values, "k": np.arange(res["x0_iter"].shape[1]), "kstep": np.arange(1, cfg.max_iter + 1),
                 "lead": np.arange(F + 1), "var": ["x", "y", "z"]},
         attrs={"config": json.dumps(OmegaConf.to_container(cfg, resolve=True)), "wall_s": res["wall_s"],
-               "dameta_version": __version__, "configuration": "E1" if cfg.dynamics == "l63" else f"E3:{cfg.emulator}",
+               "dameta_version": __version__, "configuration": configuration,
                "torch_version": torch.__version__},
     )
     if "eta_final" in res:
