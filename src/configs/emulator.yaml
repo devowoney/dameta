@@ -1,0 +1,35 @@
+# M2 emulator training (approved D2: MLP tendency + RK4). Trains on D1 train ICs; validates on D1 val ICs.
+seed: 42                      # dataset master seed
+name: clean                   # output tmp/emulators/<name>.pt
+
+teacher:                      # model generating the training trajectories (deliberate degradation = non-default)
+  sigma: 10.0
+  rho: 28.0
+  beta: 2.6666666666666665
+  xz_scale: 1.0               # 1 = exact L63; < 1 drops part of the -x*z term in dy/dt
+  dt: 0.01
+
+emulator:
+  width: 64
+  depth: 2
+  dt: 0.01
+
+train:
+  steps: 4000
+  batch: 512
+  n_roll_max: 10
+  lr: 1.0e-3
+  lr_min: 1.0e-5
+  clip: 1.0
+  val_every: 200
+  val_roll: 50
+  seed: 0
+
+data_dir: ${project_root:}/tmp/data
+out_dir: ${project_root:}/tmp/emulators
+
+hydra:
+  run:
+    dir: ${project_root:}/tmp/hydra/emulator/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false

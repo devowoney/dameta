@@ -27,17 +27,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # make `dameta` import
 from dameta import __version__  # noqa: E402
 from dameta.da import CostConfig, FourDVarCost, forecast_from_analysis, run_fourdvar  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
+from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 
 OmegaConf.register_new_resolver("project_root", lambda: str(Path(__file__).resolve().parent.parent), replace=True)
 log = logging.getLogger(__name__)
 
 
+def m1_step(ds: xr.Dataset):
+    """Physical model M1 with the dataset's own parameters (truth generator)."""
+    p = L63Params(sigma=ds.attrs["sigma"], rho=ds.attrs["rho"], beta=ds.attrs["beta"], dt=ds.attrs["dt"])
+    return L63Model(p).step
+
+
 def build_step(cfg: DictConfig, ds: xr.Dataset):
-    """Dynamics used inside 4D-Var: M1 with the dataset's own parameters (emulator M2 added in milestone 3)."""
+    """Dynamics used inside 4D-Var: M1 (E1) or the frozen emulator M2 tmp/emulators/<emulator>.pt (E3)."""
     if cfg.dynamics == "l63":
-        p = L63Params(sigma=ds.attrs["sigma"], rho=ds.attrs["rho"], beta=ds.attrs["beta"], dt=ds.attrs["dt"])
-        return L63Model(p).step
-    raise ValueError(f"dynamics {cfg.dynamics!r} not available yet")
+        return m1_step(ds)
+    if cfg.dynamics == "emulator":
+        emu = L63Emulator.load(Path(cfg.emulator_dir) / f"{cfg.emulator}.pt")
+        for p in emu.parameters():
+            p.requires_grad_(False)                       # frozen emulator: gradients w.r.t. the control only
+        assert abs(emu.cfg.dt - ds.attrs["dt"]) < 1e-12, "emulator/data time step mismatch"
+        return emu.step
+    raise ValueError(f"unknown dynamics {cfg.dynamics!r}")
 
 
 def rmse(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -93,11 +105,22 @@ def run(cfg: DictConfig) -> xr.Dataset:
         coords={"ic": ds.ic.values, "k": np.arange(res["x0_iter"].shape[1]), "kstep": np.arange(1, cfg.max_iter + 1),
                 "lead": np.arange(F + 1), "var": ["x", "y", "z"]},
         attrs={"config": json.dumps(OmegaConf.to_container(cfg, resolve=True)), "wall_s": res["wall_s"],
-               "dameta_version": __version__, "configuration": "E1" if cfg.dynamics == "l63" else "E3",
+               "dameta_version": __version__, "configuration": "E1" if cfg.dynamics == "l63" else f"E3:{cfg.emulator}",
                "torch_version": torch.__version__},
     )
     if "eta_final" in res:
         out["eta_final"] = (("ic", "ctrl_t", "var"), res["eta_final"])
+    if cfg.dynamics != "l63":
+        # E3: judge the emulator-based analysis with the TRUE model M1.
+        #   J_true_final (P1): 4D-Var cost of the analysis evaluated with M1 (same obs, B, R[, Q])
+        #   rmse_fc_m1: forecast with M1 from the analysis (IC quality); rmse_fc above = forecast with the emulator
+        step_true = m1_step(ds)
+        with torch.no_grad():
+            c_true = FourDVarCost(step_true, y, mask, x0_b, ccfg, weak=cost.weak)
+            j_true = c_true(*c_true.unpack(cost.pack(x0_safe, eta_safe)))
+        fc_m1 = forecast_from_analysis(step_true, x0_safe, ccfg, F, eta_safe).numpy()
+        out["J_true_final"] = (("ic",), np.where(finite, j_true.numpy(), np.nan))
+        out["rmse_fc_m1"] = (("ic", "lead"), np.where(finite[:, None], rmse(fc_m1, truth_fc), np.nan))
     return out
 
 
