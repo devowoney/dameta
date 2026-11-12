@@ -2,8 +2,8 @@
 E2-B (Meta-B delta, M1) val-sweep report: cost-to-target and skill per hyper-parameter configuration vs E1.
 
 Usage (project root):  python src/report_e2b.py [--group e2b_sweep] [--constraint strong] [--pattern full]
-Reads tmp/results/<group>/*_val.nc and the E1 val records of the same constraint/pattern; writes
-tmp/results/<group>/sweep_summary.{csv,md}.
+Reads tmp/results/<group>/*_<split>.nc (--split, default val) and the E1 records of that split and the same
+constraint/pattern; writes tmp/results/<group>/sweep_summary_<split>.{csv,md} (+ sweep_seed_summary_<split>.csv).
 
 Cost-to-target (as report_e1.evals_to_target): per case J* = best FINAL J of the E1 classical runs (GD, Adagrad) on
 the same problem — a FIXED reference so meta configs do not move their own target; evals to reach
@@ -55,16 +55,17 @@ def main():
     ap.add_argument("--group", default="e2b_sweep")
     ap.add_argument("--constraint", default="strong")
     ap.add_argument("--pattern", default="full")
+    ap.add_argument("--split", default="val")
     a = ap.parse_args()
-    e1 = {m: xr.open_dataset(next((ROOT / "tmp/results/e1").glob(f"{a.constraint}_{a.pattern}_{m}_lr*_val.nc")))
+    e1 = {m: xr.open_dataset(next((ROOT / "tmp/results/e1").glob(f"{a.constraint}_{a.pattern}_{m}_lr*_{a.split}.nc")))
           for m in ("adagrad", "gd")}
     j_star = np.nanmin(np.stack([d.J_iter.values[:, -1] for d in e1.values()]), axis=0)
     rows = [row(f"E1 {m}", d, j_star, {}) for m, d in e1.items()]
-    for p in sorted((ROOT / "tmp/results" / a.group).glob(f"delta_{a.constraint}_{a.pattern}_*_val.nc")):
+    for p in sorted((ROOT / "tmp/results" / a.group).glob(f"delta_{a.constraint}_{a.pattern}_*_{a.split}.nc")):
         ds = xr.open_dataset(p)
         cfg = json.loads(ds.attrs["config"])
         dl = cfg["delta"]
-        rows.append(row(p.stem.replace("_val", ""), ds, j_star,
+        rows.append(row(p.stem[: -len(a.split) - 1], ds, j_star,
                         {"episode_iters": dl["episode_iters"], "w_perf_delta": dl["w_perf_delta"],
                          "output_scale": cfg["net"]["output_scale"], "align": dl["grad_align_steps"],
                          "trans": dl["grad_trans_steps"], "meta_lr": dl["meta_lr"], "K": dl["K"],
@@ -77,7 +78,7 @@ def main():
     df = pd.concat([df[df.config.str.startswith("E1")], meta])
     sel = meta[meta.eligible].sort_values(["evals_1pct", "fc_1TU"]).head(1)
     out = ROOT / "tmp/results" / a.group
-    df.to_csv(out / "sweep_summary.csv", index=False)
+    df.to_csv(out / f"sweep_summary_{a.split}.csv", index=False)
     md = to_markdown(df)
     md += f"\n\nE1 Adagrad: evals to 1% target {ref['evals_1pct']:.0f} (reached {ref['reached_1pct']:.2f}); "
     md += f"gate (<= 1/10) = {ref['evals_1pct'] / 10:.1f} evals.\n"
@@ -92,11 +93,11 @@ def main():
                                      step_ratio=("step_ratio_k<20", "mean"), diverged=("diverged", "sum")).reset_index()
         agg = agg[agg.n_seeds > 1]
         agg["eligible"] = (agg.reached_1pct_mean >= ref["reached_1pct"]) & (agg.fc_1TU_mean <= 1.05 * ref["fc_1TU"])
-        agg.to_csv(out / "sweep_seed_summary.csv", index=False)
+        agg.to_csv(out / f"sweep_seed_summary_{a.split}.csv", index=False)
         md += "\n## Seed-aggregated (selection on mean)\n\n" + to_markdown(agg)
         best = agg[agg.eligible].sort_values(["evals_1pct_mean", "fc_1TU_mean"]).head(1)
         md += "\n\nSelected (seed mean): " + (best[keys].to_dict("records")[0].__repr__() if len(best) else "NONE") + "\n"
-    (out / "sweep_summary.md").write_text(md)
+    (out / f"sweep_summary_{a.split}.md").write_text(md)
     print(md)
 
 

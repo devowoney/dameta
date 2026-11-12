@@ -61,3 +61,8 @@
   all seeds stretch ~7.2, fc 0.652-0.671 (stage B C1-ep3 fc std 0.035 -> 0.011; s0 identical to stage B since
   epoch 2 = last). Gate (10.8) still missed by ~1 eval: ~9.3x vs Adagrad (per seed 11 / 12 / 12).
   Caveat: epoch score uses the first 100 val ICs, also part of the val evaluation (mild optimism; test is clean).
+- 2026-11-12: Pilot locked C1 (sweep v4 wap0) and asked for test. Frozen inference of the 3 v4 seed learners on
+  test / test_ood (src/scripts/test_e2b_delta.sh; tmp/results/e2b; report_e2b.py --split). Test: 9.5 +- 0.5 evals
+  to 1% vs Adagrad 70 (7.4x), reached 0.967 vs 0.915, fc@1TU 0.595 vs 0.542 (+9.7%) -> gate NOT met (needs ~7 evals
+  and <= +5%). test_ood: 29.5 vs 125 (4.2x), reached 0.898 vs 0.835, fc@1TU 1.14 vs 0.975 (+17%). rmse_x0 slightly
+  better than Adagrad on both. Paper-ready entry: memory/branches/m4-meta-b/findings.md.
