@@ -22,3 +22,42 @@
   0/16 diverged, 10/16 hit the 300-iter cap (episodes only cover k < 20 -> episode_iters must cover the teacher's
   convergence length); supervised weak 3 epochs -> J blows up (median J_final 2.6e4), as expected without obs/grad.
   Next: delta meta-training strong/full M1 on all train ICs + val sweep (episode_iters, w_perf_delta, output_scale).
+- 2026-11-11: E2-B delta val sweep launched (12 configs, 4 single-thread workers, src/scripts/sweep_e2b_delta.sh;
+  logs tmp/logs/e2b_sweep_*.log, records tmp/results/e2b_sweep, learners tmp/meta/e2b_sweep). Report: src/report_e2b.py.
+- 2026-11-12: E2-B delta val sweep done (12/12, 0 diverged; tmp/results/e2b_sweep/sweep_summary.{csv,md}).
+  All 12 eligible. Evals to 1% target (median): 53-71 vs E1 Adagrad 108 (GD 252); reached 0.965-0.985 vs 0.925;
+  skill unchanged (fc@1TU 0.649-0.666 vs 0.656; J_final 16.4 vs 16.5). Selected (pre-registered rule):
+  ep300_wp2.5_os5 (53 evals, reached 0.97). Gate (<= 10.8 evals) NOT met (~5x off): speed-up ~2x only.
+  w_perf_delta 1 weaker (68-71); output_scale 2 vs 5 no effect (median stretch ~1.3-1.4, bound never active);
+  ep300 slightly better than ep100 (53-58 vs 59-62) at 3x train cost (~19 min vs ~6.5 min). Single training
+  seed: differences between top configs likely within seed noise. report_e2b.py uses report_e1.to_markdown
+  (tabulate not installed).
+- 2026-11-12: Pilot: close the gate gap. Sweep v2 stage A launched (12 configs, src/scripts/sweep_e2b_delta_v2.sh,
+  tmp/results/e2b_sweep2, logs tmp/logs/e2b_sweep2_*). report_e2b.py now lists all swept params + seed aggregation.
+- 2026-11-12: Sweep v2 stage A done (12/12, 0 diverged; tmp/results/e2b_sweep2/sweep_summary.*). Reproducibility:
+  a6/1e-3/os5 == sweep-1 ep100_wp2.5_os5 row exactly (62 evals). ALIGN is the bottleneck: a6 45-65 evals
+  (stretch ~1.4), a2 11.5-19.5 (stretch 4-6, fc@1TU 0.645 = E1 skill), a0 unstable (stretch pinned at 1+os;
+  os5 stalls: reached 0.24, fc 0.86; os10 fc 0.712 > 1.05 x E1 -> ineligible). Best single run a2/mlr1e-2/os10:
+  11.5 evals to 1% target (gate 10.8), reached 0.97, fc 0.646. Stage B launched (18 runs: C1 a2/1e-2/os10,
+  C2 a2/1e-3/os10, C3 a2/1e-2/os20 x epochs {1,3} x seeds {0,1,2}; tmp/results/e2b_sweep3).
+- 2026-11-12: Stage B done (18/18, 0 diverged; tmp/results/e2b_sweep3/sweep_summary.md + sweep_seed_summary.csv).
+  Seed means (3 seeds, val, evals to 1% target / reached / fc@1TU; E1 Adagrad 108 / 0.925 / 0.656; gate 10.8):
+    C1 os10 mlr1e-2 ep3: 11.3 +- 0.6 / 0.967 / 0.675 +- 0.035  -> SELECTED by rule (gate missed by 0.5 eval)
+    C1 os10 mlr1e-2 ep1: 13.3 +- 2.8 / 0.970 / 0.655 +- 0.014  (most robust skill)
+    C3 os20 ep1 11.7 (fc 0.690, ineligible); C2 mlr1e-3 and C3 ep3 ineligible (seed collapses).
+  Failure mode: with longer training / larger bound S drifts to s = +output_scale everywhere (step_ratio pinned at
+  1 + os; C1-ep3-s1 11.0, C3-ep3-s1/s2 21.0 -> identical trajectories, seed-independent) and skill degrades
+  (fc 0.71-0.79). Cause: l_perf is linear in the step, so it rewards longer steps until the gradient flips;
+  overshoot is only penalised after it happens, and with ALIGN 2/10 nothing pulls s back.
+  Speed-up vs Adagrad now ~9.5x (11.3 vs 108), from ~2x in sweep 1.
+- 2026-11-12: Pilot accepted anti-saturation tuning. Implemented w_align_perf (MetaBConfig) and train_meta_b
+  val_score / best-epoch restore; runner keys delta.{w_align_perf, select_epoch, select_k, select_n_val}.
+  Tests 19/19; selection smoke OK. Sweep v4 launched (12 runs; tmp/results/e2b_sweep4).
+- 2026-11-12: Sweep v4 done (12/12, 0 diverged; tmp/results/e2b_sweep4/sweep_summary.md, sweep_seed_summary.csv).
+  Seed means (evals to 1% / reached / fc@1TU):  wap0 + selection 11.7 +- 0.6 / 0.970 / 0.665 +- 0.011 (SELECTED);
+  wap0.05 12.3 +- 2.1 / 0.960 / 0.670 +- 0.037; wap0.1 13.2 +- 1.0 / 0.960 / 0.673 +- 0.047; wap0.2 16.0 +- 5.6 /
+  0.918 (ineligible). Residual l_align does NOT prevent saturation (wap0.05-s2 ratio 10.4 fc 0.71; wap0.1-s1 ratio
+  11.0 fc 0.73) and slows convergence -> rejected. Best-epoch selection alone fixes it: wap0 best epochs (2, 1, 1),
+  all seeds stretch ~7.2, fc 0.652-0.671 (stage B C1-ep3 fc std 0.035 -> 0.011; s0 identical to stage B since
+  epoch 2 = last). Gate (10.8) still missed by ~1 eval: ~9.3x vs Adagrad (per seed 11 / 12 / 12).
+  Caveat: epoch score uses the first 100 val ICs, also part of the val evaluation (mild optimism; test is clean).

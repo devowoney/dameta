@@ -34,6 +34,7 @@ delta:                        # bice delta-mode defaults
   grad_align_steps: 6
   grad_trans_steps: 2
   w_align: 1.0
+  w_align_perf: 0.0           # residual l_align weight in PERF (anti-saturation; 0 = bice)
   w_perf_delta: 2.5
   lambda_reg: 1.0e-4          # l_reg = lambda_reg * mean(theta^2)  (lambda^2 bug fixed)
   meta_lr: 1.0e-3
@@ -42,6 +43,9 @@ delta:                        # bice delta-mode defaults
   batch: 100                  # cases per episode
   episode_iters: 100          # outer iterations per episode
   train_seed: 0
+  select_epoch: false         # keep the best epoch by val score (median J after select_k frozen iterations)
+  select_k: 10
+  select_n_val: 100           # first n val ICs used for the epoch score
 
 supervised:
   hidden: 128

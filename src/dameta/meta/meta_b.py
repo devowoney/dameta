@@ -15,7 +15,8 @@ With s = 0 the chain is exactly one teacher step; S can rescale each component o
 Meta update (train mode, online, num_meta_steps Adam steps on theta per outer iteration, before the IC move):
     phase ALIGN (m < grad_align_steps, and always at the first outer iteration):  w_align l_align + l_reg
     phase TRANS (next grad_trans_steps):                                      w_align l_align + w_perf l_perf + l_reg
-    phase PERF  (remaining):                                                  w_perf l_perf + l_reg
+    phase PERF  (remaining):                               w_perf l_perf + w_align_perf l_align + l_reg
+              (w_align_perf = 0 in bice; > 0 keeps a weak pull of s toward 0 against saturation at +output_scale)
     l_align = mean(s^2) at c^k                         (stay at the teacher step = imitation)
     l_perf  = mean_cases[ -<g^k, c^{k-1} - c_K(theta)> / <g^{k-1}, f^{k-1}> ]   (Delta inner loss)
               c_K(theta) replays the previous chain from c^{k-1} with the current theta; first-order model of
@@ -57,6 +58,7 @@ class MetaBConfig:
     grad_align_steps: int = 6       # ALIGN meta-steps
     grad_trans_steps: int = 2       # TRANS meta-steps (then PERF)
     w_align: float = 1.0
+    w_align_perf: float = 0.0       # residual l_align weight in PERF (anti-saturation; 0 = bice)
     w_perf_delta: float = 2.5
     lambda_reg: float = 1e-4        # l_reg = lambda_reg * mean(theta^2)
     meta_lr: float = 1e-3
@@ -130,7 +132,7 @@ class MetaB:
             l_align = self.stretch(c, g_std, k).pow(2).mean()
             sq = sum(p.pow(2).sum() for p in params) / n_params
             l_reg = cfg.lambda_reg * sq
-            l_meta = l_reg + (cfg.w_align * l_align if phase in ("ALIGN", "TRANS") else 0.0)
+            l_meta = l_reg + (cfg.w_align if phase in ("ALIGN", "TRANS") else cfg.w_align_perf) * l_align
             if phase in ("TRANS", "PERF"):
                 total = prev["c"] - self.chain(prev["c"], prev["g_std"], prev["f"], prev["k"])
                 l_perf = (-(g * total).sum(1) / prev["denom"]).mean()
@@ -243,14 +245,18 @@ def run_meta_b(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaB, method
 
 def train_meta_b(learner: MetaB, make_cost: Callable[[np.ndarray], FourDVarCost], x0_b: torch.Tensor,
                  method: str, lr: float, n_epochs: int = 1, batch: int = 100, episode_iters: int = 100,
-                 seed: int = 0, log: Optional[Callable[[dict], None]] = None) -> list:
+                 seed: int = 0, log: Optional[Callable[[dict], None]] = None,
+                 val_score: Optional[Callable[["MetaB"], float]] = None) -> list:
     """
     Meta-train across training ICs (main protocol, frozen inference afterwards): each episode = one batch of train
     cases optimised for `episode_iters` outer iterations with online Delta inner-loss updates (theta and its Adam
     state persist across episodes). make_cost(idx) builds the 4D-Var cost of cases idx. Returns episode summaries.
+    val_score(learner) -> float (lower = better), if given, is evaluated after every epoch on frozen theta; the
+    best epoch's theta is restored at the end (summary rows with "val_score", "best_epoch").
     """
     rng = np.random.default_rng(seed)
     n, history = x0_b.shape[0], []
+    best = (float("inf"), None, -1)
     for epoch in range(n_epochs):
         perm = rng.permutation(n)
         for b0 in range(0, n, batch):
@@ -265,6 +271,17 @@ def train_meta_b(learner: MetaB, make_cost: Callable[[np.ndarray], FourDVarCost]
             history.append(summ)
             if log is not None:
                 log(summ)
+        if val_score is not None:
+            score = float(val_score(learner))
+            if score < best[0]:
+                best = (score, copy.deepcopy(learner.net.state_dict()), epoch)
+            row = {"epoch": epoch, "val_score": score, "best_epoch": best[2]}
+            history.append(row)
+            if log is not None:
+                log(row)
+    if best[1] is not None:
+        learner.net.load_state_dict(best[1])
+        learner.net.eval()
     return history
 
 

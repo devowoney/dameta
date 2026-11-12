@@ -67,14 +67,27 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
 
         def log_ep(h):
             log.info("episode %s", {k: round(v, 4) if isinstance(v, float) else v for k, v in h.items()})
-            if writer is not None:
+            if writer is not None and "val_score" in h:
+                writer.add_scalar("train/val_score", h["val_score"], h["epoch"])
+            elif writer is not None:
                 i = h["epoch"] * 10_000 + h["batch"]
                 for key in ("J_end_med", "L_perf_applied_mean", "step_ratio_med"):
                     writer.add_scalar(f"train/{key}", h[key], i)
 
+        val_score = None
+        if cfg.delta.select_epoch:
+            # Best-epoch selection on VAL ICs: median J after select_k frozen outer iterations (lower = faster)
+            va = load_split(cfg, "val", cfg.delta.select_n_val)
+            cost_va, xb_va = cost_factory(cfg, va, step)(), torch.tensor(va.x0_b.values)
+
+            def val_score(lrn):
+                r = run_meta_b(cost_va, xb_va, lrn, cfg.method, float(cfg.lr), max_iter=int(cfg.delta.select_k),
+                               tol=0.0)
+                return float(np.nanmedian(r["J_iter"][:, -1]))
+
         hist = train_meta_b(learner, lambda idx: make_tr(idx), xb_tr, cfg.method, float(cfg.lr),
                             n_epochs=cfg.delta.n_epochs, batch=cfg.delta.batch, episode_iters=cfg.delta.episode_iters,
-                            seed=cfg.delta.train_seed, log=log_ep)
+                            seed=cfg.delta.train_seed, log=log_ep, val_score=val_score)
         info = {"train_history": hist, "train_grad_evals": len(xb_tr) * cfg.delta.episode_iters * cfg.delta.n_epochs}
     elif cfg.variant == "supervised":
         pairs = collect_teacher_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
