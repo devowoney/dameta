@@ -60,3 +60,35 @@ tmp/meta/e2b_sweep4/*_C1_wap0_s{0,1,2}.pt; val sweeps tmp/results/e2b_sweep{,2,3
 tests/test_m4.py 19/19 (s = 0 chain = teacher step; frozen s = 0 = classical Adagrad; exact l_perf chain rule;
 stretch bound / no sign flip; case independence; supervised loop with oracle gradient = classical); M2 8/8, M3 5/5;
 run_4dvar refactor bit-identical to saved E1 record; sweep reproducibility (a repeated config matched to all digits).
+
+### P3 / G2 and the origin of the forecast-skill gap (2026-11-12)
+Method: backward Lyapunov vectors by QR iteration of the exact discrete TL model along the 1000-step spin-up preceding
+each test IC (reproduced from the seeded generator, bit-identical to x_true(t0); exponents ≈ (0.9, 0, −14.5) in-dist,
+(0.74, −0.06, −14.3) on test_ood; invariance |cos(M b1(t), b1(t+1))| = 1) and on along the truth window.
+src/report_p3g2.py -> tmp/results/e2b/p3g2_{test,test_ood}.md (+ paired Wilcoxon tests, E2-B seed mean vs Adagrad).
+
+| split | method | P3 (b1) | P3 (b1+b2) | IC error | unstable IC error | end-of-window error | its unstable part | G2 cos(step, −∇J) | G2 first 10 | steps decreasing J (mean) | cases with ≥ 1 increasing step |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| test | E1 Adagrad | 0.252 | 0.890 | 0.743 | 0.308 | 0.438 | 0.330 | 0.911 | 0.888 | 0.9998 | 0.03 |
+| test | E1 GD | 0.269 | 0.921 | 0.743 | 0.341 | 0.466 | 0.357 | 1 | 1 | — | — |
+| test | E2-B | 0.270 | 0.899 | 0.726 | 0.301 | 0.454 | 0.350 | 0.903 | 0.887 | 0.970 | 0.49 |
+| test_ood | E1 Adagrad | 0.443 | 0.954 | 0.855 | 0.194 | 0.574 | 0.368 | 0.906 | 0.870 | 0.997 | 0.11 |
+| test_ood | E1 GD | 0.309 | 0.939 | 0.895 | 0.223 | 0.784 | 0.573 | 1 | 1 | — | — |
+| test_ood | E2-B | 0.357 | 0.931 | 0.797 | 0.209 | 0.657 | 0.460 | 0.935 | 0.846 | 0.958 | 0.63 |
+(medians over cases; E2-B = mean of 3 seed medians, seed sd ≤ 0.01 except end-of-window unstable error ood 0.012)
+
+- **The skill gap is a basin-switching tail, not a systematic degradation.** On test, 193/200 cases end in the same
+  minimum as Adagrad and their forecast is unchanged (median per-case relative difference +0.15 %; median fc@1TU
+  0.567 vs 0.584). In 6 cases Meta-B lands in a worse local minimum (median fc@1TU 3.5 vs 0.19) and in 1 a better one;
+  these few cases shift the median fc@1TU by +9.7 %. test_ood: 16–17 worse vs 5–7 better (same cases in all seeds).
+  The 1-TU window makes the L63 4D-Var cost multimodal; the 5–8× stretched early steps of Meta-B sometimes jump
+  across a ridge that Adagrad does not cross.
+- **Unstable-direction hypothesis rejected as the main cause:** P3 on test equals Adagrad (0.270 vs 0.252, p = 0.77)
+  and the unstable end-of-window error differs by +0.0005 per case (p = 0.02, negligible). On test_ood P3 is lower
+  than Adagrad (0.357 vs 0.443, p = 2e-4), so the North Star condition P3 ≥ classical holds on test but not on
+  test_ood.
+- **G2:** step direction is as gradient-aligned as Adagrad (cos 0.90 vs 0.91 test; 0.94 vs 0.91 ood), but the
+  stretched steps overshoot: 3.0 % of Meta-B steps increase the true cost (Adagrad 0.02 %), in 49 % of test cases at
+  least once (Adagrad 3 %). Consistent with l_perf being linear in step length (overshoot penalised only afterwards).
+- Implication: the cost/skill trade-off of Meta-B is governed by a few large early steps; a basin-safe step control
+  (e.g. bounding the first-iteration stretch, or rejecting a chain move when the next J rises) is the natural fix.

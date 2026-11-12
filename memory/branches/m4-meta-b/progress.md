@@ -66,3 +66,7 @@
   to 1% vs Adagrad 70 (7.4x), reached 0.967 vs 0.915, fc@1TU 0.595 vs 0.542 (+9.7%) -> gate NOT met (needs ~7 evals
   and <= +5%). test_ood: 29.5 vs 125 (4.2x), reached 0.898 vs 0.835, fc@1TU 1.14 vs 0.975 (+17%). rmse_x0 slightly
   better than Adagrad on both. Paper-ready entry: memory/branches/m4-meta-b/findings.md.
+- 2026-11-12: Pilot asked for P3 + G2. New src/dameta/eval/lyapunov.py (spin-up replay, bit-identical; QR BLVs) and
+  src/report_p3g2.py -> tmp/results/e2b/p3g2_*.md. Result: forecast gap = basin switching in a few cases (test: 6
+  worse / 1 better of 200; ood 16-17 / 5-7); same-basin cases have identical skill. P3 = Adagrad on test, lower on ood;
+  G2 cos ~ Adagrad; 3 % of Meta-B steps increase J (overshoot) vs 0.02 %. Findings appended to branch findings.md.
