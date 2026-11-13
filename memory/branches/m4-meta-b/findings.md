@@ -92,3 +92,48 @@ src/report_p3g2.py -> tmp/results/e2b/p3g2_{test,test_ood}.md (+ paired Wilcoxon
   least once (Adagrad 3 %). Consistent with l_perf being linear in step length (overshoot penalised only afterwards).
 - Implication: the cost/skill trade-off of Meta-B is governed by a few large early steps; a basin-safe step control
   (e.g. bounding the first-iteration stretch, or rejecting a chain move when the next J rises) is the natural fix.
+
+## Milestone 4 — E2-B / E4-B across all configurations (locked C1, 3 seeds, 2026-11-13)
+Protocol: locked C1 config (no per-configuration retuning); teacher = Adagrad with the E1/E3-selected lr (0.3 for
+emulator strong runs, else 0.1); one learner per dynamics x constraint x obs pattern, meta-trained on train ICs with
+that dynamics (emulator J only for E4-B), best epoch on val, frozen on test / test_ood. Cost-to-target and skill vs
+classical Adagrad ON THE SAME DYNAMICS (E1 for E2-B, E3 for E4-B); forecasts always with the true model M1.
+Gap closure = median(fc_E3 − fc_E4) / median(fc_E3 − fc_E1), fc RMSE at 1 TU, per-case pairing.
+Source: src/report_meta_b.py -> tmp/results/meta_b_summary_{test,test_ood}.{md,csv}.
+
+### Test (200 held-out ICs; Meta-B mean ± sd over 3 seeds)
+| dynamics | constraint / obs | evals classical → Meta-B | speed-up | reached cls / meta | fc@1TU classical → Meta-B | Δ fc | basin worse / better | E3−E1 gap | closure |
+|---|---|---|---|---|---|---|---|---|---|
+| M1 (E2-B) | strong / full | 70 → 9.5 ± 0.5 | 7.4× | 0.92 / 0.97 | 0.542 → 0.595 | +9.6 % | 6 / 1 | — | — |
+| M1 (E2-B) | strong / x_only | 40 → 6.7 ± 1.2 | 6.0× | 0.97 / 0.98 | 1.34 → 1.36 | +1.2 % | 2 / 2 | — | — |
+| M1 (E2-B) | weak / full | 138 → 21.7 ± 1.5 | 6.4× | 0.99 / 0.92 | 0.558 → 0.692 | +24 % | 17 / 2 | — | — |
+| M1 (E2-B) | weak / x_only | 50 → 8.3 ± 0.6 | 6.0× | 0.98 / 0.94 | 1.35 → 1.54 | +14 % | 10 / 0 | — | — |
+| xz095 (E4-B) | strong / full | 29.5 → 6.0 ± 5.3 | 4.9×* | 1.00 / 0.57 | 3.10 → 3.56 | +15 % | 79 / 0 | 2.09 | −0.05 ± 0.04 |
+| xz095 (E4-B) | strong / x_only | 14 → 3.3 ± 2.9 | 4.2×* | 1.00 / 0.65 | 3.47 → 3.63 | +4.7 % | 64 / 0 | 1.56 | −0.04 ± 0.04 |
+| xz095 (E4-B) | weak / full | 155 → 20.2 ± 4.3 | 7.7× | 0.96 / 0.80 | 3.46 → 3.40 | −1.8 % | 10 / 2 | 2.10 | +0.005 ± 0.007 |
+| xz095 (E4-B) | weak / x_only | 76 → 7.0 ± 0.0 | 10.9× | 0.96 / 0.96 | 3.45 → 3.57 | +3.2 % | 7 / 3 | 1.45 | −0.001 ± 0.000 |
+| xz090 (E4-B) | strong / full | 46 → 11.0 ± 1.0 | 4.2× | 0.99 / 0.94 | 5.02 → 5.13 | +2.2 % | 9 / 1 | 3.77 | −0.000 ± 0.000 |
+| xz090 (E4-B) | weak / full | 250 → 17.8 ± 0.8 | 14.0× | 0.94 / 0.94 | 5.29 → 5.19 | −1.9 % | 7 / 6 | 3.85 | −0.001 ± 0.000 |
+| clean (E4-B, control) | strong / full | 73 → 9.5 ± 0.5 | 7.7× | 0.93 / 0.94 | 0.69 → 0.78 | +12 % | 10 / 0 | 0.035 | (gap ≈ 0) |
+\* median over the cases that reach the target; only 57–65 % do, so the speed-up is optimistic there.
+test_ood (same order): speed-ups 4.2 / 5.1 / 5.6 / 6.1 (E2-B) and 2.3 / 2.8 / 5.7 / 6.6 / 2.2 / 8.3 / 4.2 (E4-B);
+Δ fc +12 % to +66 % (E2-B) and +26 % to +130 % (E4-B); no configuration passes the gate.
+
+### Findings
+- **Cost:** Meta-B reduces gradient evaluations 4–14× on held-out ICs in every configuration (2–8× out of
+  distribution). The formal gate (≥ 10× and Δ fc ≤ 5 % vs classical on the same dynamics) is met only by
+  xz095 weak/x_only (10.9×, +3.2 %) and xz090 weak/full (14×, −1.9 %), on test only.
+- **No re-learning of missing dynamics:** the gap-closure ratio is ≈ 0 wherever the emulator gap is large
+  (xz090: −0.0003 / −0.001; xz095 weak: ±0.005), and negative where basin switching dominates (xz095 strong ≈ −0.05;
+  test_ood down to −1.1). This is structural: Meta-B only rescales the teacher's steps on the EMULATOR cost, so it
+  converges to the same emulator-4D-Var minimum (true-model cost ratio P1 E4/E1 ≈ E3/E1, e.g. 4.3 vs 4.3 xz090
+  strong); nothing in its inputs or its training loss carries information about the true dynamics. The North Star
+  claim "the meta learner can re-learn missing dynamics" is NOT supported for Meta-B (delta).
+- **Universal failure mode = basin switching:** the forecast penalty tracks the number of cases ending in a worse
+  local minimum (E2-B weak/full 17, xz095 strong 79 vs ≤ 10 elsewhere). It is worst when the teacher step is already
+  large (Adagrad lr 0.3 for emulator strong runs: × up to 11 stretch), where 35–43 % of cases never reach the 1 %
+  target — the locked config, tuned with lr 0.1, does not transfer to a 3× larger teacher step.
+- **Configurations without basin switching keep skill:** E2-B strong/x_only (+1.2 %), E4-B weak and xz090 strong
+  (−1.9 % to +3.2 %) — there Meta-B is a pure accelerator of the classical solution.
+- Out of distribution, speed-ups shrink and basin switches grow in every configuration (generalization limit of a
+  state-dependent preconditioner learned on the training region).

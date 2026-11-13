@@ -70,3 +70,17 @@
   src/report_p3g2.py -> tmp/results/e2b/p3g2_*.md. Result: forecast gap = basin switching in a few cases (test: 6
   worse / 1 better of 200; ood 16-17 / 5-7); same-basin cases have identical skill. P3 = Adagrad on test, lower on ood;
   G2 cos ~ Adagrad; 3 % of Meta-B steps increase J (overshoot) vs 0.02 %. Findings appended to branch findings.md.
+- 2026-11-12: Extension launched: 30 jobs (10 configs x 3 seeds; src/scripts/meta_b_job.sh, xargs -P 4, ~4.5 h);
+  records tmp/results/{e2b, e4b_xz095, e4b_xz090, e4b_clean}, learners tmp/meta/<group>, logs tmp/logs/<group>_*.
+  Smokes OK (weak/x_only M1; emulator xz095).
+- 2026-11-13: Extension interrupted by session end after 18/30 jobs (E2-B 3 configs; xz095 strong/full, strong/x_only,
+  weak/full). Found 3 bad records: xz095 weak/x_only s0 val (interrupted write) and xz095 weak/full s2 test/test_ood
+  (NetCDF HDF write error at 18:46/18:54 — /Odyssey shared FS at 100 %, 256 GB free, down from 727 GB on 11-12).
+  meta_b_job.sh now resumes from a loadable checkpoint (rebuilds val/test/test_ood without retraining). Relaunched
+  13 jobs (xz095 weak/full s2 rebuild, xz095 weak/x_only, xz090 strong/weak full, clean strong/full).
+- 2026-11-13: Extension complete (30/30 jobs + 3 rebuilt records; 96 records verified readable; log "Logging error"
+  tracebacks = log-flush failures during the FS incident, runs completed). report_meta_b.py now skips unreadable
+  records with a warning. Results: speed-up 4-14x test (2-8x ood); gate met only xz095 weak/x_only and xz090 weak/full
+  (test); gap closure ~0 everywhere (Meta-B converges to the emulator minimum: structural); basin switching drives the
+  skill penalty, worst with the lr-0.3 teacher (xz095 strong: 79/200 worse basins, 57 % reach target).
+  Findings section appended to branch findings.md.
