@@ -84,3 +84,7 @@
   (test); gap closure ~0 everywhere (Meta-B converges to the emulator minimum: structural); basin switching drives the
   skill penalty, worst with the lr-0.3 teacher (xz095 strong: 79/200 worse basins, 57 % reach target).
   Findings section appended to branch findings.md.
+- 2026-11-13: Pilot: supervised variant at full scale. meta_b_job.sh gained a variant argument (7th, default delta;
+  delta naming unchanged); report_meta_b.py --variant supervised. 6 jobs (M1 + xz095 strong/full x 3 seeds), 18
+  records OK. Result: fails by construction — train MSE ~1.0 (= mean), val cos ~0; at inference cos(g_hat, grad)
+  ~ -0.5, reached 3-15 %, IC error 3.5-10 (background 0.87). Findings appended.

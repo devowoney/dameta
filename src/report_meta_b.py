@@ -1,8 +1,11 @@
 """
 Consolidated Meta-B (delta, locked C1) report over all configurations: E2-B (M1) and E4-B (emulators) vs classical.
 
-Usage (project root):  python src/report_meta_b.py [--splits test test_ood]
-Writes tmp/results/meta_b_summary_<split>.{csv,md}.
+Usage (project root):  python src/report_meta_b.py [--splits test test_ood] [--variant delta|supervised]
+Writes tmp/results/meta_b_summary_<split>.{csv,md} (delta) or meta_b_sup_summary_<split>.{csv,md} (supervised).
+Supervised: "evals" = iterations = FORWARD runs (no adjoint), so its speed-up is not in the same unit as the
+classical gradient evaluations (a gradient evaluation ~ 2-3 forward runs); cos(g_hat, grad) = median gradient
+fidelity w.r.t. the gradient of the dynamics used (emulator gradient for E4-B).
 
 Per configuration (dynamics, constraint, obs pattern) and split, Meta-B = 3 training seeds (mean +- sd of per-seed
 medians over the 200 ICs); classical = Adagrad with the E1/E3-selected lr ON THE SAME DYNAMICS:
@@ -55,7 +58,10 @@ def fc(ds, emu: bool):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--splits", nargs="+", default=["test", "test_ood"])
+    ap.add_argument("--variant", default="delta", choices=["delta", "supervised"])
     a = ap.parse_args()
+    sup = a.variant == "supervised"
+    tag = "sup" if sup else "C1"
     for split in a.splits:
         rows = []
         for dyn, con, pat in CONFIGS:
@@ -64,7 +70,7 @@ def main():
             cls_folder = f"e3_{dyn}" if emu else "e1"
             meta_folder = f"e4b_{dyn}" if emu else "e2b"
             metas = []
-            for p in sorted((RES / meta_folder).glob(f"delta_{name}_adagrad_lr*_C1_s[0-9]_{split}.nc")):
+            for p in sorted((RES / meta_folder).glob(f"{a.variant}_{name}_adagrad_lr*_{tag}_s[0-9]_{split}.nc")):
                 try:                                       # unreadable (interrupted / failed write) -> skipped, warned
                     metas.append(xr.open_dataset(p).load())
                 except OSError:
@@ -82,7 +88,9 @@ def main():
                 per.append({"evals": np.nanmedian(e_m), "reached": np.isfinite(e_m).mean(),
                             "fc": np.nanmedian(fc(m, emu)), "ic": np.nanmedian(m.rmse_x0.values),
                             "basin_worse": int((jm > 1.1 * ja).sum()), "basin_better": int((ja > 1.1 * jm).sum()),
-                            "diverged": int(m.diverged.sum()), "fc_case": fc(m, emu)})
+                            "diverged": int(m.diverged.sum()), "fc_case": fc(m, emu),
+                            "cos_ghat": float(np.nanmedian(m.cos_ghat_grad.values)) if "cos_ghat_grad" in m
+                            else np.nan})
             mean = lambda k: float(np.mean([p[k] for p in per]))  # noqa: E731
             sd = lambda k: float(np.std([p[k] for p in per], ddof=1)) if len(per) > 1 else np.nan  # noqa: E731
             r = {"dynamics": "M1 (E2-B)" if not emu else f"{dyn} (E4-B)", "constraint": con, "obs": pat,
@@ -95,6 +103,10 @@ def main():
                  "IC err cls/meta": f"{np.nanmedian(ada.rmse_x0.values):.3f} / {mean('ic'):.3f}",
                  "basin -/+": f"{mean('basin_worse'):.0f} / {mean('basin_better'):.0f}",
                  "diverged": sum(p["diverged"] for p in per)}
+            # supervised: an iteration costs one FORWARD run (no adjoint); classical: one forward + adjoint run
+            r["meta cost unit"] = "forward run" if sup else "gradient eval"
+            if sup:
+                r["cos(g_hat, grad)"] = mean("cos_ghat")
             r["gate"] = bool(r["speedup"] >= 10 and r["fc rel"] <= 0.05)
             if emu:
                 e1 = one("e1", name, "adagrad", split)
@@ -109,9 +121,10 @@ def main():
                 r["P1 E3/E1"] = float(np.nanmedian(ada.J_true_final.values / e1.J_iter.values[:, -1]))
             rows.append(r)
         df = pd.DataFrame(rows)
-        out = RES / f"meta_b_summary_{split}"
+        out = RES / (f"meta_b_sup_summary_{split}" if sup else f"meta_b_summary_{split}")
         df.to_csv(out.with_suffix(".csv"), index=False)
-        md = f"## Meta-B (locked C1) vs classical Adagrad — {split}\n\n" + to_markdown(df) + "\n"
+        title = "Meta-B supervised" if sup else "Meta-B (locked C1)"
+        md = f"## {title} vs classical Adagrad — {split}\n\n" + to_markdown(df) + "\n"
         out.with_suffix(".md").write_text(md)
         print(md)
 

@@ -137,3 +137,27 @@ test_ood (same order): speed-ups 4.2 / 5.1 / 5.6 / 6.1 (E2-B) and 2.3 / 2.8 / 5.
   (−1.9 % to +3.2 %) — there Meta-B is a pure accelerator of the classical solution.
 - Out of distribution, speed-ups shrink and basin switches grow in every configuration (generalization limit of a
   state-dependent preconditioner learned on the training region).
+
+## Meta-B supervised variant at full scale (2026-11-13)
+Setup: G_θ(running state, emb(k)) → running gradient (MLP 3 × 128, SiLU), trained by MSE on all teacher pairs of the
+1000 training ICs (classical Adagrad run, same lr/stopping: 567 186 pairs M1, 314 553 pairs xz095), best epoch on
+val-IC pairs, 3 seeds; frozen inference with the same Adagrad teacher fed ĝ (no gradient evaluation; one forward
+run per iteration for J). Configs: strong/full on M1 (E2-B) and xz095 (E4-B). src/report_meta_b.py --variant
+supervised -> tmp/results/meta_b_sup_summary_{test,test_ood}.md.
+
+| split | config | reached 1 % (cls / sup) | IC error (cls / sup; background 0.87) | fc@1TU (cls / sup) | cos(ĝ, ∇J) | worse basin |
+|---|---|---|---|---|---|---|
+| test | M1 strong/full | 0.92 / 0.03 | 0.43 / 3.55 | 0.54 / 7.09 | −0.55 | 196 / 200 |
+| test | xz095 strong/full | 1.00 / 0.11 | 0.77 / 7.86 | 3.10 / 9.03 | −0.53 | 192 / 200 |
+| test_ood | M1 strong/full | 0.83 / 0.13 | 0.49 / 3.49 | 0.98 / 10.2 | −0.39 | 187 / 200 |
+| test_ood | xz095 strong/full | 0.99 / 0.15 | 0.68 / 10.0 | 2.20 / 10.8 | −0.58 | 192 / 200 |
+
+- **Negative result, by construction:** training MSE stays at ≈ 1.0 in units of the gradient std (= predicting the
+  mean; 0.96 after 50 epochs by memorisation) and validation MSE rises (1.24 → 1.28); validation cos(ĝ, g) ≈ 0.
+  The 4D-Var gradient depends on each case's observations and background, which the model does not see, so the
+  target is not a function of its inputs (state, iteration) — the identifiability concern raised at design time.
+- At inference the predicted gradient is anti-aligned with the true one (cos ≈ −0.5): the iterate drifts away from
+  the data, analysis errors grow to 4–10× the background error, and almost no case reaches the cost target.
+- Contrast with the delta variant: the same imitation idea works when S receives the running gradient (which carries
+  the observation information) and only rescales the teacher step. Any supervised variant needs case information
+  (gradient, or observations / background) among its inputs.
