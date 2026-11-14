@@ -35,6 +35,13 @@ def l63_tendency(x: torch.Tensor, p: L63Params) -> torch.Tensor:
     return torch.stack([dx1, dx2, dx3], dim=-1)
 
 
+def l63_tendency_theta(x: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+    """dx/dt of Lorenz-63 with per-case parameters theta [n, 3] = (sigma, rho, beta) (BPE, M5); x [n, 3]."""
+    x1, x2, x3 = x[..., 0], x[..., 1], x[..., 2]
+    s, r, b = theta[..., 0], theta[..., 1], theta[..., 2]
+    return torch.stack([s * (x2 - x1), x1 * (r - x3) - x2, x1 * x2 - b * x3], dim=-1)
+
+
 def l63_jacobian(x: torch.Tensor, p: L63Params) -> torch.Tensor:
     """Analytic Jacobian d(tendency)/dx, shape [..., 3, 3]. Used only to validate autodiff in the tests."""
     x1, x2, x3 = x[..., 0], x[..., 1], x[..., 2]

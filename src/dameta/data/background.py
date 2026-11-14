@@ -43,3 +43,21 @@ def lagged_background(ds: xr.Dataset, step: Callable, name: str, lags: Iterable[
         attrs={"false_model": name, "false_model_desc": model_desc, "tau_b": int(tau_b), "floor": float(floor),
                "split": ds.attrs["split"], "seed": int(ds.attrs["seed"]), "dataset": "D1v2-background"},
     )
+
+
+def load_hybrid_background(data_dir, split: str, name: str, seed: int = 42, hybrid: dict = None):
+    """
+    First guess and HYBRID background covariance of false model `name` (pilot 2026-11-14):
+        B_h = alpha * B_ens + (1 - alpha) * s2 * I     (alpha, s2 tuned truth-free by src/tune_hybrid_b.py)
+    Returns torch tensors x0_b [n, 3], B_h [n, 3, 3], B_h^-1 [n, 3, 3] and the (alpha, s2) used.
+    """
+    import json
+    from pathlib import Path
+    data_dir = Path(data_dir)
+    bg = xr.load_dataset(data_dir / f"l63v2_{split}_seed{seed}_bg_{name}.nc")
+    if hybrid is None:
+        hybrid = json.loads((data_dir / f"hybrid_B_seed{seed}.json").read_text())[name]
+    a, s2 = float(hybrid["alpha"]), float(hybrid["s2"])
+    b_ens = torch.tensor(bg.B.values)
+    b_h = a * b_ens + (1 - a) * s2 * torch.eye(3, dtype=b_ens.dtype)
+    return torch.tensor(bg.x0_b.values), b_h, torch.linalg.inv(b_h), {"alpha": a, "s2": s2}

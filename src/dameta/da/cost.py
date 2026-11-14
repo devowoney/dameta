@@ -59,8 +59,9 @@ class FourDVarCost:
     """J(x0[, eta]) per case, plus its term breakdown. Weak constraint iff `weak=True`."""
 
     def __init__(self, step: Step, y: torch.Tensor, mask: torch.Tensor, x0_b: torch.Tensor, cfg: CostConfig,
-                 weak: bool = False):
+                 weak: bool = False, b_inv: Optional[torch.Tensor] = None):
         self.step, self.y, self.x0_b, self.cfg, self.weak = step, y, x0_b, cfg, weak
+        self.b_inv = b_inv                                    # [n, 3, 3] case-specific B^-1 (M5); None = sigma_b^2 I
         self.mask = mask.to(y.dtype)                          # [n_obs, 3], 1 = observed
         self.t_obs = torch.arange(0, cfg.window + 1, cfg.obs_every)
         self.n_grad_evals = 0                                 # cost counter: forward + adjoint runs (see grad())
@@ -69,10 +70,17 @@ class FourDVarCost:
         """Return {"Jb", "Jo", "Jq", "J"} each [n]."""
         traj = window_trajectory(self.step, x0, self.cfg, eta if self.weak else None)
         innov = (traj[:, self.t_obs] - self.y) * self.mask    # H(x) - y on observed components only
-        jb = 0.5 * ((x0 - self.x0_b) ** 2).sum(-1) / self.cfg.sigma_b**2
+        jb = self.jb(x0)
         jo = 0.5 * (innov**2).sum((-1, -2)) / self.cfg.sigma_o2
         jq = 0.5 * (eta**2).sum((-1, -2)) / self.cfg.sigma_q**2 if self.weak else torch.zeros_like(jb)
         return {"Jb": jb, "Jo": jo, "Jq": jq, "J": jb + jo + jq}
+
+    def jb(self, x0: torch.Tensor) -> torch.Tensor:
+        """Background term: 1/2 |x0 - x0_b|^2 / sigma_b^2, or 1/2 (x0 - x0_b)^T B^-1 (x0 - x0_b) with b_inv."""
+        d = x0 - self.x0_b
+        if self.b_inv is None:
+            return 0.5 * (d**2).sum(-1) / self.cfg.sigma_b**2
+        return 0.5 * torch.einsum("ni,nij,nj->n", d, self.b_inv, d)
 
     def __call__(self, x0: torch.Tensor, eta: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.terms(x0, eta)["J"]
@@ -96,3 +104,48 @@ class FourDVarCost:
         if not self.weak:
             return (control,)
         return control[:, :3], control[:, 3:].reshape(control.shape[0], self.cfg.n_obs - 1, 3)
+
+
+class ParamFourDVarCost(FourDVarCost):
+    """
+    BPE (M5, F1 only): strong-constraint 4D-Var with the L63 parameters in the control,
+        control c = [x0, theta],  theta = (sigma, rho, beta) per case,
+        J(x0, theta) = J_b(x0) + J_o(trajectory of L63(theta)) + J_p,  J_p = 1/2 sum_k ((theta_k - theta_b,k) / s_k)^2
+    The dynamics is the F1 knowledge-model structure (L63 RK4) with the CONTROL parameters; theta_b = F1's own
+    parameters (prior), s = parameter prior std. Packed control [n, 6].
+    """
+
+    def __init__(self, y: torch.Tensor, mask: torch.Tensor, x0_b: torch.Tensor, cfg: CostConfig, theta_b: torch.Tensor,
+                 theta_std: torch.Tensor, dt: float = 0.01, b_inv: Optional[torch.Tensor] = None):
+        super().__init__(None, y, mask, x0_b, cfg, weak=False, b_inv=b_inv)
+        self.theta_b, self.theta_std, self.dt = theta_b, theta_std, dt
+
+    def step_theta(self, x: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        from ..dynamics.l63 import l63_tendency_theta, rk4_step
+        return rk4_step(lambda v: l63_tendency_theta(v, theta), x, self.dt)
+
+    def trajectory(self, x0: torch.Tensor, theta: torch.Tensor, n_steps: int) -> torch.Tensor:
+        states, x = [x0], x0
+        for _ in range(n_steps):
+            x = self.step_theta(x, theta)
+            states.append(x)
+        return torch.stack(states, dim=1)
+
+    def terms(self, x0: torch.Tensor, theta: torch.Tensor) -> dict:
+        traj = self.trajectory(x0, theta, self.cfg.window)
+        innov = (traj[:, self.t_obs] - self.y) * self.mask
+        jb = self.jb(x0)
+        jo = 0.5 * (innov**2).sum((-1, -2)) / self.cfg.sigma_o2
+        jp = 0.5 * (((theta - self.theta_b) / self.theta_std) ** 2).sum(-1)
+        return {"Jb": jb, "Jo": jo, "Jp": jp, "Jq": torch.zeros_like(jb), "J": jb + jo + jp}
+
+    def __call__(self, x0: torch.Tensor, theta: torch.Tensor) -> torch.Tensor:
+        return self.terms(x0, theta)["J"]
+
+    def pack(self, x0: torch.Tensor, theta: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if theta is None:
+            theta = self.theta_b.expand(x0.shape[0], 3)
+        return torch.cat([x0, theta], dim=1)
+
+    def unpack(self, control: torch.Tensor) -> tuple:
+        return control[:, :3], control[:, 3:6]
