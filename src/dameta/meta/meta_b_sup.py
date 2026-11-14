@@ -25,6 +25,7 @@ import torch
 from ..da.cost import FourDVarCost
 from ..da.fourdvar import run_fourdvar
 from ..da.reference_step import ReferenceStep
+from .meta_a import obs_features
 from .networks import GradNet
 
 
@@ -39,21 +40,27 @@ class SupConfig:
     epochs: int = 50
     batch_size: int = 1024
     seed: int = 0
+    obs_input: bool = False          # M5: append case observations + mask to the input
 
 
 def collect_teacher_pairs(cost: FourDVarCost, x0_b: torch.Tensor, method: str, lr: float, max_iter: int = 1000,
-                          tol: float = 1e-6) -> dict:
+                          tol: float = 1e-6, obs_feats: Optional[torch.Tensor] = None) -> dict:
     """(c^k, k, g^k) of every active case along the classical teacher run. Returns tensors c [N, d], k [N], g [N, d]."""
-    cs, ks, gs = [], [], []
+    cs, ks, gs, os_ = [], [], [], []
 
     def hook(k, c, g, active):
         a = active.bool()
         cs.append(c[a].clone())
+        if obs_feats is not None:
+            os_.append(obs_feats[a])
         gs.append(g[a].clone())
         ks.append(torch.full((int(a.sum()),), k, dtype=c.dtype))
 
     run_fourdvar(cost, x0_b, method, lr, max_iter, tol, on_step=hook)
-    return {"c": torch.cat(cs), "k": torch.cat(ks), "g": torch.cat(gs)}
+    out = {"c": torch.cat(cs), "k": torch.cat(ks), "g": torch.cat(gs)}
+    if obs_feats is not None:
+        out["obs"] = torch.cat(os_)
+    return out
 
 
 class MetaBSup:
@@ -62,14 +69,14 @@ class MetaBSup:
         self.net, self.cfg = net, cfg
         self.ctrl_mean, self.ctrl_std, self.g_scale = ctrl_mean, ctrl_std, g_scale
 
-    def predict_std(self, c: torch.Tensor, k) -> torch.Tensor:
-        return self.net((c - self.ctrl_mean) / self.ctrl_std, k)
+    def predict_std(self, c: torch.Tensor, k, obs=None) -> torch.Tensor:
+        return self.net((c - self.ctrl_mean) / self.ctrl_std, k, obs)
 
     @torch.no_grad()
-    def predict(self, c: torch.Tensor, k) -> torch.Tensor:
+    def predict(self, c: torch.Tensor, k, obs=None) -> torch.Tensor:
         """Predicted running gradient g_hat [n, d] (physical units)."""
         self.net.eval()
-        return self.predict_std(c, k) * self.g_scale
+        return self.predict_std(c, k, obs) * self.g_scale
 
     def fit(self, train: dict, val: dict, log=None) -> list:
         """Mini-batch Adam on standardised MSE; keeps the best-val-epoch weights. Returns per-epoch history."""
@@ -86,13 +93,14 @@ class MetaBSup:
             for b0 in range(0, n, cfg.batch_size):
                 i = perm[b0:b0 + cfg.batch_size]
                 opt.zero_grad()
-                loss = (self.predict_std(train["c"][i], train["k"][i]) - yt[i]).pow(2).mean()
+                ob = train["obs"][i] if "obs" in train else None
+                loss = (self.predict_std(train["c"][i], train["k"][i], ob) - yt[i]).pow(2).mean()
                 loss.backward()
                 opt.step()
                 tot += float(loss.detach()) * len(i)
             self.net.eval()
             with torch.no_grad():
-                pv = self.predict_std(val["c"], val["k"])
+                pv = self.predict_std(val["c"], val["k"], val.get("obs"))
                 vl = float((pv - yv).pow(2).mean())
                 vcos = float(torch.nn.functional.cosine_similarity(pv * self.g_scale, val["g"], dim=1).median())
             h = {"epoch": ep, "train_mse": tot / n, "val_mse": vl, "val_cos_med": vcos, "s": time.perf_counter() - t0}
@@ -109,7 +117,7 @@ class MetaBSup:
         n = self.net
         return {"net": n.state_dict(), "cfg": asdict(self.cfg), "ctrl_mean": self.ctrl_mean, "ctrl_std": self.ctrl_std,
                 "g_scale": self.g_scale, "net_kwargs": dict(d=n.d, hidden=self.cfg.hidden, n_layers=self.cfg.n_layers,
-                                                             emb_dim=self.cfg.emb_dim, log_k=self.cfg.log_k)}
+                                                             emb_dim=self.cfg.emb_dim, log_k=self.cfg.log_k, d_obs=n.d_obs)}
 
     @classmethod
     def from_state_dict(cls, sd: dict) -> "MetaBSup":
@@ -119,9 +127,11 @@ class MetaBSup:
         return cls(net, SupConfig(**sd["cfg"]), sd["ctrl_mean"], sd["ctrl_std"], sd["g_scale"])
 
 
-def build_sup(d: int, cfg: SupConfig, ctrl_mean: torch.Tensor, ctrl_std: torch.Tensor, train_pairs: dict) -> MetaBSup:
+def build_sup(d: int, cfg: SupConfig, ctrl_mean: torch.Tensor, ctrl_std: torch.Tensor, train_pairs: dict,
+              n_obs: int = 11) -> MetaBSup:
     torch.manual_seed(cfg.seed)
-    net = GradNet(d, cfg.hidden, cfg.n_layers, cfg.emb_dim, cfg.log_k).to(ctrl_mean.dtype)
+    net = GradNet(d, cfg.hidden, cfg.n_layers, cfg.emb_dim, cfg.log_k, d_obs=2 * n_obs * 3 if cfg.obs_input else 0)
+    net = net.to(ctrl_mean.dtype)
     g_scale = train_pairs["g"].std(0).clamp_min(1e-12)
     return MetaBSup(net, cfg, ctrl_mean, ctrl_std, g_scale)
 
@@ -136,6 +146,8 @@ def run_meta_b_sup(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaBSup,
         eta_init = torch.zeros(n, cost.cfg.n_obs - 1, 3, dtype=x0_init.dtype)
     c = cost.pack(x0_init, eta_init).detach().clone()
     teacher = ReferenceStep(c, method=method, lr=lr)
+    use_obs = getattr(getattr(learner, "cfg", None), "obs_input", False)   # stand-in learners: no obs
+    obs = obs_features(cost, learner.ctrl_mean, learner.ctrl_std) if use_obs else None
     active = torch.ones(n, dtype=c.dtype)
     n_fwd = torch.zeros(n, dtype=torch.long)
     x0_hist, j_hist, cos_hist, cosg_hist = [c[:, :3].clone()], [], [], []
@@ -150,7 +162,7 @@ def run_meta_b_sup(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaBSup,
             active = active * (~newly_done).to(c.dtype)
         if active.sum() == 0:
             break
-        g_hat = learner.predict(c, k)
+        g_hat = learner.predict(c, k) if obs is None else learner.predict(c, k, obs)
         f = teacher(c, g_hat, active)
         if diag_true_grad:                                    # diagnostics only, NOT counted as cost
             with torch.enable_grad():

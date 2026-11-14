@@ -62,19 +62,52 @@ class GradNet(nn.Module):
     """
     Supervised Meta-B network (pilot 2026-11-11): G_theta(x_std, emb(k)) -> predicted running gradient, in
     standardised units (multiply by the per-component gradient scale of the training pairs). Inputs = running
-    state + iteration embedding ONLY (no gradient, no observations). Unbounded linear output.
+    state + iteration embedding (no gradient); d_obs > 0 (M5 flag obs_input) appends the case observations + mask.
+    Unbounded linear output.
     """
 
-    def __init__(self, d: int, hidden: int = 128, n_layers: int = 3, emb_dim: int = 8, log_k: bool = True):
+    def __init__(self, d: int, hidden: int = 128, n_layers: int = 3, emb_dim: int = 8, log_k: bool = True,
+                 d_obs: int = 0):
         super().__init__()
-        self.d = d
+        self.d, self.d_obs = d, d_obs
         self.emb = IterationEmbedding(emb_dim, log_input=log_k)
-        layers, width = [], d + emb_dim
+        layers, width = [], d + d_obs + emb_dim
         for _ in range(n_layers):
             layers += [nn.Linear(width, hidden), nn.SiLU()]
             width = hidden
         self.body = nn.Sequential(*layers)
         self.head = nn.Linear(width, d)
 
-    def forward(self, x_std: torch.Tensor, k: Union[int, torch.Tensor]) -> torch.Tensor:
-        return self.head(self.body(torch.cat([x_std, self.emb(k, x_std.shape[0])], dim=1)))
+    def forward(self, x_std: torch.Tensor, k: Union[int, torch.Tensor], obs=None) -> torch.Tensor:
+        parts = [x_std] + ([obs] if self.d_obs else []) + [self.emb(k, x_std.shape[0])]
+        return self.head(self.body(torch.cat(parts, dim=1)))
+
+
+class FreeUpdateNet(nn.Module):
+    """
+    Free update rule (M5 cells 3, 5, 7): U_theta(x_std [, g_std], emb(k) [, obs]) -> out [n, d], bounded by
+    output_scale * tanh(. / output_scale). The caller turns it into a physical step Delta = scale * out.
+    use_grad=False drops the gradient input (no backward needed at inference); d_obs > 0 appends case observations
+    (flag obs_input). Zero-initialised head: Delta = 0 at start.
+    """
+
+    def __init__(self, d: int, use_grad: bool = True, d_obs: int = 0, hidden: int = 64, n_layers: int = 2,
+                 emb_dim: int = 8, output_scale: float = 5.0, zero_init: bool = True, log_k: bool = True):
+        super().__init__()
+        self.d, self.use_grad, self.d_obs, self.output_scale = d, use_grad, d_obs, float(output_scale)
+        self.emb = IterationEmbedding(emb_dim, log_input=log_k)
+        layers, width = [], d * (2 if use_grad else 1) + d_obs + emb_dim
+        for _ in range(n_layers):
+            layers += [nn.Linear(width, hidden), nn.SiLU()]
+            width = hidden
+        self.body = nn.Sequential(*layers)
+        self.head = nn.Linear(width, d)
+        if zero_init:
+            nn.init.zeros_(self.head.weight)
+            nn.init.zeros_(self.head.bias)
+
+    def forward(self, x_std: torch.Tensor, g_std, k, obs=None) -> torch.Tensor:
+        parts = [x_std] + ([g_std] if self.use_grad else []) + ([obs] if self.d_obs else [])
+        h = torch.cat(parts + [self.emb(k, x_std.shape[0])], dim=1)
+        out = self.head(self.body(h))
+        return self.output_scale * torch.tanh(out / self.output_scale)

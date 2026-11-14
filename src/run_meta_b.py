@@ -25,13 +25,16 @@ import hydra
 import numpy as np
 import torch
 import xarray as xr
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dameta.da import CostConfig, FourDVarCost  # noqa: E402
-from dameta.meta import (MetaB, MetaBConfig, MetaBSup, StretchNet, SupConfig, build_sup,  # noqa: E402
-                         collect_teacher_pairs, control_stats, run_meta_b, run_meta_b_sup, train_meta_b)
+from dameta.meta import (LearnedOptimization, MetaB, MetaBConfig, MetaBSup, StretchNet, SupConfig,  # noqa: E402
+                         UnrollConfig, build_sup, build_unroll, collect_teacher_pairs, control_stats, obs_features,
+                         run_meta_a, run_meta_b, run_meta_b_sup, train_meta_b)
+from dameta.meta.meta_b_lookahead import LookaheadConfig, collect_lookahead_pairs, fit_lookahead  # noqa: E402
+from dameta.meta.meta_greedy import GreedyConfig, GreedyOptimizer, build_greedy, run_greedy  # noqa: E402
 from run_4dvar import analysis_record, build_step  # noqa: E402  (also registers the project_root resolver)
 
 log = logging.getLogger(__name__)
@@ -90,16 +93,64 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
                             seed=cfg.delta.train_seed, log=log_ep, val_score=val_score)
         info = {"train_history": hist, "train_grad_evals": len(xb_tr) * cfg.delta.episode_iters * cfg.delta.n_epochs}
     elif cfg.variant == "supervised":
-        pairs = collect_teacher_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
-        va = load_split(cfg, "val", cfg.train.n_val_pairs_ic)
-        vpairs = collect_teacher_pairs(cost_factory(cfg, va, step)(), torch.tensor(va.x0_b.values), cfg.method,
-                                       float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
         scfg = SupConfig(**OmegaConf.to_container(cfg.supervised))
-        learner = build_sup(d, scfg, ctrl_mean, ctrl_std, pairs)
+        va = load_split(cfg, "val", cfg.train.n_val_pairs_ic)
+        cost_tr, cost_va = make_tr(), cost_factory(cfg, va, step)()
+        ob = (lambda c: obs_features(c, ctrl_mean, ctrl_std)) if scfg.obs_input else (lambda c: None)  # noqa: E731
+        pairs = collect_teacher_pairs(cost_tr, xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol),
+                                      obs_feats=ob(cost_tr))
+        vpairs = collect_teacher_pairs(cost_va, torch.tensor(va.x0_b.values), cfg.method, float(cfg.lr),
+                                       int(cfg.max_iter), float(cfg.tol), obs_feats=ob(cost_va))
+        learner = build_sup(d, scfg, ctrl_mean, ctrl_std, pairs, n_obs=CostConfig(**cfg.cost).n_obs)
         log.info("supervised pairs: train %d, val %d", len(pairs["k"]), len(vpairs["k"]))
         hist = learner.fit(pairs, vpairs, log=lambda h: log.info("epoch %s", {k: round(v, 5) if isinstance(v, float)
                                                                                else v for k, v in h.items()}))
         info = {"train_history": hist, "train_grad_evals": int(len(pairs["k"])), "n_pairs_val": int(len(vpairs["k"]))}
+    elif cfg.variant == "lookahead":
+        # M5 cell 2: Meta-B chain trained (supervised) to the teacher iterate m steps ahead
+        torch.manual_seed(cfg.lookahead.seed)
+        dk = OmegaConf.to_container(cfg.delta)
+        learner = MetaB(StretchNet(d, **cfg.net), MetaBConfig(**{k: dk[k] for k in MetaBConfig.__dataclass_fields__}),
+                        ctrl_mean, ctrl_std)
+        lcfg = LookaheadConfig(**OmegaConf.to_container(cfg.lookahead))
+        va = load_split(cfg, "val", cfg.train.n_val_pairs_ic)
+        pairs = collect_lookahead_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), lcfg.m, int(cfg.max_iter),
+                                        float(cfg.tol))
+        vpairs = collect_lookahead_pairs(cost_factory(cfg, va, step)(), torch.tensor(va.x0_b.values), cfg.method,
+                                         float(cfg.lr), lcfg.m, int(cfg.max_iter), float(cfg.tol))
+        log.info("lookahead pairs: train %d, val %d", len(pairs["k"]), len(vpairs["k"]))
+        hist = fit_lookahead(learner, pairs, vpairs, lcfg, log=lambda h: log.info("epoch %s", {
+            k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
+        info = {"train_history": hist, "train_grad_evals": int(len(pairs["k"]))}
+    elif cfg.variant == "greedy":
+        # M5 cell 3: free update without gradient input, online greedy J(x^{k+1}) / J(x^k)
+        gk = OmegaConf.to_container(cfg.greedy)
+        gcfg = GreedyConfig(**{k: gk[k] for k in GreedyConfig.__dataclass_fields__})
+        n_obs = CostConfig(**cfg.cost).n_obs
+        learner = build_greedy(d, gcfg, ctrl_mean, ctrl_std, n_obs, hidden=gk["hidden"], n_layers=gk["n_layers"],
+                               output_scale=gk["output_scale"])
+        pack = lambda xb: torch.cat([xb, torch.zeros(xb.shape[0], 3 * (n_obs - 1))], 1) \
+            if cfg.constraint == "weak" else xb  # noqa: E731
+        va = load_split(cfg, "val", gk["n_val"])
+        hist = learner.fit(lambda idx: make_tr(idx), pack(xb_tr), cost_factory(cfg, va, step)(),
+                           pack(torch.tensor(va.x0_b.values)), log=lambda h: log.info("episode %s", {
+                               k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
+        info = {"train_history": hist, "train_grad_evals": 0}
+    elif cfg.variant == "unroll":
+        # Learned optimization (M5 cells 5 / 7): K unrolled free-update steps, end-to-end on J(x^K)
+        uk = OmegaConf.to_container(cfg.unroll)
+        ucfg = UnrollConfig(**{k: uk[k] for k in UnrollConfig.__dataclass_fields__})
+        n_obs = CostConfig(**cfg.cost).n_obs
+        learner = build_unroll(d, ucfg, ctrl_mean, ctrl_std, n_obs, hidden=uk["hidden"], n_layers=uk["n_layers"],
+                               output_scale=uk["output_scale"])
+        weak = cfg.constraint == "weak"
+        pack = lambda xb: torch.cat([xb, torch.zeros(xb.shape[0], 3 * (n_obs - 1))], 1) if weak else xb  # noqa: E731
+        va = load_split(cfg, "val", uk["n_val"])
+        hist = learner.fit(lambda idx: make_tr(idx), pack(xb_tr), cost_factory(cfg, va, step)(),
+                           pack(torch.tensor(va.x0_b.values)),
+                           log=lambda h: log.info("epoch %s", {k: round(v, 5) if isinstance(v, float) else v
+                                                               for k, v in h.items()}))
+        info = {"train_history": hist, "train_grad_evals": (len(xb_tr) * ucfg.K * ucfg.epochs) if ucfg.use_grad else 0}
     else:
         raise ValueError(f"unknown variant {cfg.variant!r}")
     info["train_wall_s"] = time.perf_counter() - t0
@@ -123,7 +174,8 @@ def run(cfg: DictConfig) -> xr.Dataset:
 
     if cfg.checkpoint:
         sd = torch.load(cfg.checkpoint, weights_only=False)
-        learner = (MetaB if cfg.variant == "delta" else MetaBSup).from_state_dict(sd)
+        learner = {"delta": MetaB, "lookahead": MetaB, "supervised": MetaBSup, "greedy": GreedyOptimizer,
+                   "unroll": LearnedOptimization}[cfg.variant].from_state_dict(sd)
         info = {"loaded_from": str(cfg.checkpoint)}
     else:
         x_tr = torch.tensor(load_split(cfg, "train", cfg.train.n_train).x_true.values)
@@ -134,8 +186,14 @@ def run(cfg: DictConfig) -> xr.Dataset:
 
     cost = cost_factory(cfg, ev, step)()
     xb = torch.tensor(ev.x0_b.values)
-    if cfg.variant == "delta":
+    if cfg.variant in ("delta", "lookahead"):
         res = run_meta_b(cost, xb, learner, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
+    elif cfg.variant == "greedy":
+        res = run_greedy(cost, xb, learner, int(cfg.max_iter), float(cfg.tol))
+    elif cfg.variant == "unroll":
+        res = run_meta_a(cost, xb, learner)                      # fixed budget K, no stopping rule
+        with open_dict(cfg):
+            cfg.max_iter = int(learner.cfg.K)                    # record step axis = K
     else:
         res = run_meta_b_sup(cost, xb, learner, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol),
                              diag_true_grad=bool(cfg.diag_true_grad))
@@ -157,7 +215,7 @@ def main(cfg: DictConfig) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"{cfg.exp_name}_{cfg.split}.nc"
     out.to_netcdf(path)
-    cost_var = "n_grad_evals" if cfg.variant == "delta" else "n_fwd_evals"
+    cost_var = "n_fwd_evals" if cfg.variant in ("supervised", "greedy") else "n_grad_evals"
     log.info("%s | diverged %d/%d | converged %d | median %s %.0f | median J_final %.2f | median rmse_x0 %.3f "
              "(bg %.3f) | median rmse_fc@lead100 %.3f | wall %.1fs -> %s",
              cfg.exp_name, int(out.diverged.sum()), out.sizes["ic"], int(out.converged.sum()), cost_var,

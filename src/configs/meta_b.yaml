@@ -1,6 +1,6 @@
 # Meta-B run (E2-B = physical L63, E4-B = emulator): meta-train on train ICs, then FROZEN inference on `split`.
 # All hyper-parameters are adjustable from the command line (pilot 2026-11-11); select them on val only.
-variant: delta                # delta (bice delta chain, S(state, grad, emb(k)) stretches f) | supervised (G(state, emb(k)) -> grad)
+variant: delta                # delta (1) | lookahead (2) | greedy (3) | supervised (4) | unroll (5 / 7: unroll.use_grad)
 seed: 42                      # dataset master seed
 split: val                    # evaluation split: val (tuning) | test | test_ood   (never tune on test*)
 pattern: full
@@ -57,6 +57,46 @@ supervised:
   epochs: 50
   batch_size: 1024
   seed: 0
+  obs_input: false            # M5: append observations y + mask (cell 4 with case data)
+
+lookahead:                    # M5 cell 2: Meta-B chain (net + delta.K) trained to the teacher iterate m steps ahead
+  m: 5
+  lr: 1.0e-3
+  epochs: 30
+  batch_size: 1024
+  seed: 0
+
+greedy:                       # M5 cell 3: free update without gradient, online greedy J(x^{k+1}) / J(x^k)
+  obs_input: false
+  step_scale: 0.1
+  output_scale: 5.0
+  hidden: 64
+  n_layers: 2
+  meta_lr: 1.0e-3
+  num_meta_steps: 1
+  n_epochs: 3
+  batch: 100
+  episode_iters: 100
+  grad_clip: 1.0
+  select_k: 10
+  seed: 0
+  n_val: 100
+
+unroll:                       # learned optimization (M5 cells 5 = use_grad true / 7 = use_grad false)
+  K: 20                       # fixed step budget (sweep {5, 10, 20, 50})
+  use_grad: true
+  second_order: false         # cell 5: keep d grad J / d theta (Hessian-vector products) in training
+  obs_input: false            # no-gradient option: append observations y + mask to the input
+  step_scale: 0.1             # Delta = step_scale * control climatological std * out, |out| <= output_scale
+  output_scale: 5.0
+  hidden: 64
+  n_layers: 2
+  lr: 1.0e-3
+  epochs: 30
+  batch: 100
+  grad_clip: 1.0
+  seed: 0
+  n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0))
 
 cost:
   window: 100
