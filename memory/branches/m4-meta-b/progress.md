@@ -88,3 +88,10 @@
   delta naming unchanged); report_meta_b.py --variant supervised. 6 jobs (M1 + xz095 strong/full x 3 seeds), 18
   records OK. Result: fails by construction — train MSE ~1.0 (= mean), val cos ~0; at inference cos(g_hat, grad)
   ~ -0.5, reached 3-15 %, IC error 3.5-10 (background 0.87). Findings appended.
+- 2026-11-13: Pilot chose rho275 as main emulator; rerun E3 + E4-B here. Copied rho275/sig105 from the m3 worktree.
+  E3 lr sweep (tmp/results/e3_rho275_sweep, 14 runs incl. edge extensions): Adagrad 0.3 strong / 0.1 weak, GD 3e-4.
+  Launched 28 jobs (12 E4-B locked C1 + 16 E3 finals test/test_ood; tmp/results/{e4b_rho275, e3_rho275}).
+  report_meta_b.py CONFIGS now include rho275.
+- 2026-11-14: rho275 reruns done (52 records verified; report_e3.py rho275 needed tmp/figs created). E3 gap E3-E1 @1TU
+  halves vs xz095 (1.16 vs 2.09 strong/full). E4-B: speed-up 1.5-7.4x test, closure ~0 (-0.003..0), basin switching
+  with lr-0.3 teacher (strong/full 32 worse). Findings appended.

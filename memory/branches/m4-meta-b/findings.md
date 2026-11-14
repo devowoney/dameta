@@ -161,3 +161,32 @@ supervised -> tmp/results/meta_b_sup_summary_{test,test_ood}.md.
 - Contrast with the delta variant: the same imitation idea works when S receives the running gradient (which carries
   the observation information) and only rescales the teacher step. Any supervised variant needs case information
   (gradient, or observations / background) among its inputs.
+
+## E3 and E4-B with the new main emulator rho275 (L63 with ρ = 27.5; 2026-11-14)
+Emulator: trained and quality-checked on branch m3-emulator (memory/branches/m3-emulator-v2/findings.md). E3 lr by
+the pre-registered rule on val (Adagrad 0.3 strong / 0.1 weak, GD 3·10⁻⁴; edges extended, interior). E4-B = locked C1
+Meta-B, 3 seeds, teacher = selected Adagrad lr. Sources: tmp/results/e3_rho275/compare_e1.md (src/report_e3.py),
+tmp/results/meta_b_summary_{test,test_ood}.md (src/report_meta_b.py).
+
+### E3 (classical Adagrad) with rho275 vs E1 and vs the old xz095 emulator (test, medians)
+| config | P1 J_M1: E3 rho275 / xz095 (E1) | IC RMSE: rho275 / xz095 (E1) | fc@1TU (M1 forecast): rho275 / xz095 (E1) | paired gap E3−E1 @1TU: rho275 / xz095 | evals to 1 % |
+|---|---|---|---|---|---|
+| strong / full | 21.8 / 31.9 (16.5) | 0.534 / 0.771 (0.429) | 1.95 / 3.10 (0.542) | **1.16 / 2.09** | 23 |
+| strong / x_only | 6.50 (5.43) | 0.644 (0.608) | 2.20 (1.34) | 0.48 / 1.56 | 8 |
+| weak / full | 21.5 (16.4) | 0.529 (0.428) | 2.07 (0.558) | 1.15 / 2.10 | 140 |
+| weak / x_only | 6.47 (5.36) | 0.657 (0.601) | 2.17 (1.35) | 0.48 / 1.45 | 47 |
+The parameter-biased emulator roughly halves the emulator penalty (gap 1.16 vs 2.09 strong/full; 0.48 vs 1.5 x_only)
+while keeping a clear, measurable gap for the gap-closure analysis.
+
+### E4-B (Meta-B) with rho275 (test; test_ood in brackets)
+| config | evals E3 → Meta-B | speed-up | reached E3 / Meta-B | Δ fc vs E3 | basin worse / better | gap closure |
+|---|---|---|---|---|---|---|
+| strong / full | 23 → 11.2 ± 2.9 | 2.1× [1.4×] | 0.99 / 0.82 | +12 % [+99 %] | 32 / 1 | −0.003 [−0.16] |
+| strong / x_only | 8 → 5.3 ± 0.6 | 1.5× [1.9×] | 0.99 / 0.97 | +1.2 % [+7 %] | 4 / 0 | −0.000 [−0.000] |
+| weak / full | 139 → 18.8 ± 2.0 | 7.4× [5.4×] | 0.96 / 0.91 | +3.1 % [+54 %] | 16 / 3 | −0.003 [−0.005] |
+| weak / x_only | 46 → 6.7 ± 0.6 | 6.9× [5.6×] | 0.98 / 0.96 | +9.4 % [+10 %] | 9 / 0 | −0.002 [−0.001] |
+- Conclusions of the xz runs hold with the milder, parameter-biased emulator: Meta-B accelerates emulator 4D-Var
+  (up to 7× weak; only 1.5–2× strong, where the classical teacher already uses lr 0.3 and needs 8–23 evaluations)
+  but does not close the emulator gap (closure −0.003 to 0; P1 E4/E1 ≈ E3/E1, 1.06–1.27 vs 1.06–1.16).
+- Basin switching remains the failure mode with the lr-0.3 teacher (strong/full: 32 worse cases, 82 % reach target),
+  less severe than with xz095 (79 worse, 57 %). No configuration passes the gate.

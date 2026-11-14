@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RES = ROOT / "tmp/results"
 LEAD = 100
 CONFIGS = [("l63", c, p) for c in ("strong", "weak") for p in ("full", "x_only")] + \
-          [(e, c, p) for e in ("xz095", "xz090", "clean") for c in ("strong", "weak") for p in ("full", "x_only")]
+          [(e, c, p) for e in ("rho275", "xz095", "xz090", "clean") for c in ("strong", "weak") for p in ("full", "x_only")]
 
 
 def one(folder: str, cfgname: str, method: str, split: str):
