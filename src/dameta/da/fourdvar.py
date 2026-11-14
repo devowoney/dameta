@@ -75,7 +75,7 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
     out = {
         "x0_iter": x0_iter.numpy(), "J_iter": j_iter.numpy(), "cos_step_grad": cos.numpy(),
         "n_grad_evals": n_evals.numpy(), "converged": ((active == 0) & (n_evals < max_iter) & torch.isfinite(j_final)).numpy(),
-        "x0_a": c[:, :3].numpy(), "wall_s": wall,
+        "x0_a": c[:, :3].numpy(), "wall_s": wall, "control_final": c.numpy(),
     }
     if cost.weak:
         out["eta_final"] = cost.unpack(c)[1].numpy()

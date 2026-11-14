@@ -1,0 +1,43 @@
+# Classical 4D-Var on D1 v2 (M5 blueprint: model-error-isolated BICE / BPE; memory/branches/m5-meta-grid/blueprint.md)
+seed: 42
+split: val                    # val (lr tuning) | test | test_ood   (never tune on test*)
+pattern: full                 # full | x_only
+constraint: strong            # strong | weak   (bpe: strong only)
+problem: bice                 # bice (initial condition) | bpe (joint [x0, sigma, rho, beta]; model f1 only)
+model: f1                     # estimation model: truth (E1 reference) | f1 (L63 rho 27.5) | emulator
+emulator: rho275              # used when model = emulator
+background: null              # lagged-ensemble background name; null = f1 for truth / f1, the emulator name for emulator
+method: adagrad               # gd | adagrad
+lr: 0.1
+gradient: exact               # exact (adjoint) | fd (central FD, F1 forward only) | hybrid (J: F1, grad: emulator adjoint)
+fd_eps: 1.0e-6
+surrogate_emulator: rho275    # gradient source for gradient=hybrid
+max_iter: 1000
+tol: 1.0e-6
+n_cases: null
+
+f1:                           # knowledge numerical model (false physics F1) = BPE prior mean
+  sigma: 10.0
+  rho: 27.5
+  beta: 2.6666666666666665
+bpe_prior_rel_std: 0.1        # parameter prior std = 10 % of each prior value
+
+cost:                         # window / obs geometry are read from the D1 v2 file; B = hybrid (tmp/data/hybrid_B_*.json)
+  sigma_o2: 2.0
+  sigma_q: 0.1
+forecast: 500
+
+data_dir: ${project_root:}/tmp/data
+emulator_dir: ${project_root:}/tmp/emulators
+result_group: v2_${model}${bpe_suffix:${problem}}${grad_suffix:${gradient}}
+out_dir: ${project_root:}/tmp/results/${result_group}
+exp_name: ${problem}_${constraint}_${pattern}_${method}_lr${lr}_${split}
+
+hydra:
+  run:
+    dir: ${project_root:}/tmp/hydra/fourdvar_v2/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${project_root:}/tmp/hydra/fourdvar_v2_sweep/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

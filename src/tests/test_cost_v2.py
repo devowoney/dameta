@@ -101,6 +101,34 @@ def test_bpe_identifiability():
     report("J_o lower at true rho = 28 than at prior 27.5 (fraction of cases)", better, "> 0.8", better > 0.8)
 
 
+def test_adjoint_free_gradients():
+    """FD gradient (F1 forward runs only) == exact F1 gradient; hybrid = F1 cost + emulator gradient; run counts."""
+    from dameta.da.gradients import FDGradient, HybridGradient
+    from dameta.dynamics.emulator import L63Emulator
+    x0_b, _, b_inv, _ = background()
+    for weak in (False, True):
+        cost = FourDVarCost(F1.step, Y, MASK, x0_b, CFG, weak=weak, b_inv=b_inv)
+        c = cost.pack(x0_b, torch.zeros(16, CFG.n_obs - 1, 3) + 0.01 if weak else None)
+        j_ex, g_ex = cost.grad(c)
+        fd = FDGradient(cost)
+        j_fd, g_fd = fd.grad(c)
+        rel = float(((g_fd - g_ex).norm(dim=1) / g_ex.norm(dim=1)).max())
+        d = c.shape[1]
+        report(f"FD gradient == exact F1 gradient ({'weak' if weak else 'strong'}); {2 * d + 1} fwd runs", rel,
+               "< 1e-5", rel < 1e-5 and float((j_fd - j_ex).abs().max()) == 0 and fd.n_fwd_model == 2 * d + 1)
+    emu = L63Emulator.load(ROOT / "tmp/emulators/rho275.pt")
+    for p in emu.parameters():
+        p.requires_grad_(False)
+    cost = FourDVarCost(F1.step, Y, MASK, x0_b, CFG, b_inv=b_inv)
+    sur = FourDVarCost(emu.step, Y, MASK, x0_b, CFG, b_inv=b_inv)
+    hy = HybridGradient(cost, sur)
+    j_h, g_h = hy.grad(x0_b)
+    ok = torch.equal(j_h, cost(x0_b)) and torch.equal(g_h, sur.grad(x0_b)[1])
+    cos = float(torch.nn.functional.cosine_similarity(g_h, cost.grad(x0_b)[1], dim=1).median())
+    report("hybrid: J from F1, gradient from emulator; cos(emulator grad, F1 grad) median", cos, "J, g exact copies",
+           ok and hy.n_fwd_model == 1 and hy.n_surrogate_grads == 1)
+
+
 if __name__ == "__main__":
     for name, fn in [(k, v) for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
