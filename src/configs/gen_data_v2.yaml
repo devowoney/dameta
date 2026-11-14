@@ -1,0 +1,44 @@
+# D1 v2 — truth + observations (window = Lyapunov time of the false model) and time-lagged false-model backgrounds.
+# Design: memory/branches/m5-meta-grid/blueprint.md (pilot 2026-11-14).
+seed: 42
+
+l63:                           # TRUTH model
+  sigma: 10.0
+  rho: 28.0
+  beta: 2.6666666666666665
+  dt: 0.01
+
+data:
+  window: 110                  # 1.1 TU (Lyapunov time of F1, common to F1 / F2)
+  forecast: 500
+  obs_every: 10                # 12 obs times
+  sigma_o2: 2.0
+  history: 100                 # truth stored 1 TU before t0 (max lag)
+  spinup: 1000
+  ic_init_std: 10.0
+  heldout_region: true
+  ood_r_in: 3.0
+  ood_r_out: 4.0
+
+n_ic:
+  train: 1000
+  val: 200
+  test: 200
+  test_ood: 200
+
+background:                    # time-lagged ensemble of each FALSE model
+  lags: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]   # steps (0.1 .. 1.0 TU)
+  tau_b: 50                    # first guess = the 0.5-TU member (pilot 2026-11-14)
+  floor: 0.01                  # B += floor * tr(B)/3 * I
+  false_models:                # name -> definition
+    f1: {kind: l63, sigma: 10.0, rho: 27.5, beta: 2.6666666666666665}
+    rho275: {kind: emulator, file: rho275}
+
+emulator_dir: ${project_root:}/tmp/emulators
+out_dir: ${project_root:}/tmp/data
+
+hydra:
+  run:
+    dir: ${project_root:}/tmp/hydra/gen_data_v2/${now:%Y-%m-%d_%H-%M-%S}
+  job:
+    chdir: false
