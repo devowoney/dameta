@@ -75,53 +75,57 @@ def rmse(a, b):
     return np.sqrt(((a - b) ** 2).mean(-1))
 
 
-def run(cfg: DictConfig) -> xr.Dataset:
+def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
+    """D1 v2 data, lagged hybrid background and the (exact-gradient) cost of `split` — shared with the meta runner."""
     torch.set_default_dtype(torch.float64)
     assert cfg.problem in ("bice", "bpe")
     assert cfg.problem == "bice" or (cfg.model == "f1" and cfg.constraint == "strong"), "BPE: model f1, strong only"
-    ds = xr.load_dataset(Path(cfg.data_dir) / f"l63v2_{cfg.split}_seed{cfg.seed}.nc")
-    x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, cfg.split, background_name(cfg), int(cfg.seed))
-    if cfg.n_cases is not None:
-        n = int(cfg.n_cases)
+    ds = xr.load_dataset(Path(cfg.data_dir) / f"l63v2_{split}_seed{cfg.seed}.nc")
+    x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
+    if n_cases is not None:
+        n = int(n_cases)
         ds, x0_b, b_h, b_inv = ds.isel(ic=slice(0, n)), x0_b[:n], b_h[:n], b_inv[:n]
     ccfg = CostConfig(window=int(ds.attrs["window"]), obs_every=int(ds.attrs["obs_every"]),
                       sigma_o2=float(cfg.cost.sigma_o2), sigma_q=float(cfg.cost.sigma_q))
     y = torch.tensor(ds.y_obs.values)
     mask = torch.tensor(ds.obs_mask.sel(pattern=cfg.pattern).values)
     weak = cfg.constraint == "weak"
-    step_t = truth_step(ds)
     if cfg.problem == "bpe":
         theta_b = torch.tensor([cfg.f1.sigma, cfg.f1.rho, cfg.f1.beta])
         cost = ParamFourDVarCost(y, mask, x0_b, ccfg, theta_b, cfg.bpe_prior_rel_std * theta_b, ds.attrs["dt"], b_inv)
     else:
-        step = estimation_step(cfg, ds)
-        cost = FourDVarCost(step, y, mask, x0_b, ccfg, weak=weak, b_inv=b_inv)
-    base = cost
-    if cfg.gradient != "exact":
-        # adjoint-free baselines (cell-8 claim): F1 forward runs only for J
-        assert cfg.problem == "bice" and cfg.model == "f1", "fd / hybrid gradients: model f1, problem bice"
-        if cfg.gradient == "fd":
-            cost = FDGradient(base, float(cfg.fd_eps))
-        elif cfg.gradient == "hybrid":
-            emu = L63Emulator.load(Path(cfg.emulator_dir) / f"{cfg.surrogate_emulator}.pt")
-            for p in emu.parameters():
-                p.requires_grad_(False)
-            cost = HybridGradient(base, FourDVarCost(emu.step, y, mask, x0_b, ccfg, weak=weak, b_inv=b_inv))
-        else:
-            raise ValueError(cfg.gradient)
+        cost = FourDVarCost(estimation_step(cfg, ds), y, mask, x0_b, ccfg, weak=weak, b_inv=b_inv)
+    return {"ds": ds, "ccfg": ccfg, "x0_b": x0_b, "b_inv": b_inv, "ab": ab, "y": y, "mask": mask, "weak": weak,
+            "cost": cost}
 
-    res = run_fourdvar(cost, x0_b, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
 
-    # ---- evaluation against the truth ----------------------------------------------------------------------------
+def subset_cost(cfg: DictConfig, P: dict, idx) -> FourDVarCost:
+    """Cost of the cases idx of a set-up problem (training batches)."""
+    if cfg.problem == "bpe":
+        c = P["cost"]
+        return ParamFourDVarCost(P["y"][idx], P["mask"], P["x0_b"][idx], P["ccfg"], c.theta_b, c.theta_std, c.dt,
+                                 P["b_inv"][idx])
+    return FourDVarCost(P["cost"].step, P["y"][idx], P["mask"], P["x0_b"][idx], P["ccfg"], weak=P["weak"],
+                        b_inv=P["b_inv"][idx])
+
+
+def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.Dataset:
+    """Truth-based D3-v2 record of an optimizer result (classical or meta; see module docstring)."""
+    ds, ccfg, x0_b, b_inv, weak, base = P["ds"], P["ccfg"], P["x0_b"], P["b_inv"], P["weak"], P["cost"]
+    step_t = truth_step(ds)
     x_true, L, F = ds.x_true.values, ccfg.window, int(cfg.forecast)
     truth_fc = x_true[:, L:L + F + 1]
-    c_fin = torch.tensor(res["control_final"])
+    if "control_final" in res:
+        c_fin = torch.tensor(res["control_final"])
+    else:                                              # meta runners: rebuild the control from x0_a [+ eta_final]
+        parts = [torch.tensor(res["x0_a"])] + ([torch.tensor(res["eta_final"]).flatten(1)] if weak else [])
+        c_fin = torch.cat(parts, 1)
     finite = torch.isfinite(c_fin).all(1)
     x0_a = torch.where(finite[:, None], c_fin[:, :3], x0_b)
     eta = torch.nan_to_num(torch.tensor(res["eta_final"])) if weak else None
     if cfg.problem == "bpe":
-        theta_a = torch.where(finite[:, None], c_fin[:, 3:6], cost.theta_b.expand(len(x0_a), 3))
-        step_est = lambda x: cost.step_theta(x, theta_a)                       # noqa: E731
+        theta_a = torch.where(finite[:, None], c_fin[:, 3:6], base.theta_b.expand(len(x0_a), 3))
+        step_est = lambda x: base.step_theta(x, theta_a)                       # noqa: E731
         step_b = L63Model(L63Params(sigma=cfg.f1.sigma, rho=cfg.f1.rho, beta=cfg.f1.beta, dt=ds.attrs["dt"])).step
     else:
         step_est = step_b = base.step
@@ -129,7 +133,7 @@ def run(cfg: DictConfig) -> xr.Dataset:
         fc_a = forecast_from_analysis(step_est, x0_a, ccfg, F, eta).numpy()
         fc_m1 = forecast_from_analysis(step_t, x0_a, ccfg, F, eta).numpy()
         fc_b = forecast_from_analysis(step_b, x0_b, ccfg, F).numpy()
-        c_true = FourDVarCost(step_t, y, mask, x0_b, ccfg, weak=weak, b_inv=b_inv)
+        c_true = FourDVarCost(step_t, P["y"], P["mask"], x0_b, ccfg, weak=weak, b_inv=b_inv)
         j_true = c_true(*c_true.unpack(c_true.pack(x0_a, eta)))
     fin = finite.numpy()
     nanif = lambda a: np.where(fin.reshape((-1,) + (1,) * (a.ndim - 1)), a, np.nan)   # noqa: E731
@@ -146,22 +150,45 @@ def run(cfg: DictConfig) -> xr.Dataset:
             "rmse_fc_m1": (("ic", "lead"), nanif(rmse(fc_m1, truth_fc))),
             "rmse_fc_b": (("ic", "lead"), rmse(fc_b, truth_fc)),
         },
-        coords={"ic": ds.ic.values, "k": np.arange(res["x0_iter"].shape[1]), "kstep": np.arange(1, cfg.max_iter + 1),
-                "lead": np.arange(F + 1), "var": ["x", "y", "z"]},
+        coords={"ic": ds.ic.values, "k": np.arange(res["x0_iter"].shape[1]),
+                "kstep": np.arange(1, res["cos_step_grad"].shape[1] + 1), "lead": np.arange(F + 1),
+                "var": ["x", "y", "z"]},
         attrs={"config": json.dumps(OmegaConf.to_container(cfg, resolve=True)), "wall_s": res["wall_s"],
                "dameta_version": __version__, "torch_version": torch.__version__, "dataset": "D1v2",
-               "configuration": f"{cfg.problem}:{cfg.model}" + (f":{cfg.emulator}" if cfg.model == "emulator" else ""),
-               "background": background_name(cfg), "hybrid_alpha": ab["alpha"], "hybrid_s2": ab["s2"]},
+               "configuration": configuration, "background": background_name(cfg),
+               "hybrid_alpha": P["ab"]["alpha"], "hybrid_s2": P["ab"]["s2"]},
     )
     if weak:
         out["eta_final"] = (("ic", "ctrl_t", "var"), res["eta_final"])
+    if cfg.problem == "bpe":
+        out["theta_a"] = (("ic", "param"), theta_a.numpy())
+        out = out.assign_coords(param=["sigma", "rho", "beta"])
+    return out
+
+
+def run(cfg: DictConfig) -> xr.Dataset:
+    P = setup_problem(cfg, cfg.split, cfg.n_cases)
+    base, cost = P["cost"], P["cost"]
+    if cfg.gradient != "exact":
+        # adjoint-free baselines (cell-8 claim): F1 forward runs only for J
+        assert cfg.problem == "bice" and cfg.model == "f1", "fd / hybrid gradients: model f1, problem bice"
+        if cfg.gradient == "fd":
+            cost = FDGradient(base, float(cfg.fd_eps))
+        elif cfg.gradient == "hybrid":
+            emu = L63Emulator.load(Path(cfg.emulator_dir) / f"{cfg.surrogate_emulator}.pt")
+            for p in emu.parameters():
+                p.requires_grad_(False)
+            cost = HybridGradient(base, FourDVarCost(emu.step, P["y"], P["mask"], P["x0_b"], P["ccfg"],
+                                                     weak=P["weak"], b_inv=P["b_inv"]))
+        else:
+            raise ValueError(cfg.gradient)
+    res = run_fourdvar(cost, P["x0_b"], cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
+    conf = f"{cfg.problem}:{cfg.model}" + (f":{cfg.emulator}" if cfg.model == "emulator" else "")
+    out = evaluate_v2(cfg, P, res, conf)
     if cfg.gradient != "exact":
         out.attrs["gradient"] = cfg.gradient
         out.attrs["n_fwd_model_total"] = int(cost.n_fwd_model)      # forward runs of F1 (all cases, batched)
         out.attrs["fwd_per_gradient"] = int(cost.n_fwd_model // max(cost.n_grad_evals, 1))
-    if cfg.problem == "bpe":
-        out["theta_a"] = (("ic", "param"), theta_a.numpy())
-        out = out.assign_coords(param=["sigma", "rho", "beta"])
     return out
 
 

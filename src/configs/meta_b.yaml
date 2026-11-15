@@ -98,6 +98,29 @@ unroll:                       # learned optimization (M5 cells 5 = use_grad true
   seed: 0
   n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0))
 
+learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J_o from innovations)
+  surrogate_emulator: rho275  # supervision target = this emulator's autodiff grad J_o
+  hidden: 128
+  n_layers: 3
+  emb_dim: 8
+  log_k: true
+  lr: 1.0e-3
+  epochs: 50
+  batch_size: 1024
+  seed: 0
+  n_val_ic: 200
+
+# ---- D1 v2 (M5 blueprint; dataset=v2): model-error-isolated setting, see configs/fourdvar_v2.yaml -------------------
+dataset: v1                   # v1 (D1) | v2 (D1 v2: lagged false-model first guess, hybrid B, false models)
+model: f1                     # v2 estimation model: truth | f1 | emulator (uses `emulator`)
+background: null              # v2 lagged background name (null = f1 for truth / f1, emulator name for emulator)
+problem: bice                 # v2: bice | bpe
+f1:
+  sigma: 10.0
+  rho: 27.5
+  beta: 2.6666666666666665
+bpe_prior_rel_std: 0.1
+
 cost:
   window: 100
   obs_every: 10

@@ -55,3 +55,22 @@
   paper-ready entry in findings.md. Key: false-model IC 0.42 vs truth-model 0.33 (first guess 0.645); F2 ~ F1;
   BPE rho 27.81 and gap vs E1 1.02 -> 0.45; FD == adjoint (7 / 73 fwd per gradient); hybrid no loss (1 fwd).
   Next: step 5 (cell 8 + meta grid on D1 v2).
+- 2026-11-14: Step 5 started. run_4dvar_v2 refactored into setup_problem / subset_cost / evaluate_v2 (bit-identical
+  rerun of a F1 test record). Cell 8 built: src/dameta/meta/learned_gradient.py (one forward run -> J + innovations;
+  analytic grad J_b (+ J_q); GradNet on [x, innovations, mask, emb(k)] predicts grad J_o; supervised on the emulator's
+  autodiff grad J_o at states of the adjoint-free hybrid classical run; inference 1 forward / iteration).
+  tests/test_cell8.py 5/5 (decomposition exact 7e-15; oracle loop == classical 1e-14). run_meta_b.py: Problem
+  abstraction (dataset v1 | v2), variant learned_grad, v2 records via evaluate_v2; configs/meta_b.yaml v2 keys.
+  Smoke: all variants on v1 and v2 OK. Grid launched: src/scripts/m5_grid_job.sh, 60 jobs = {f1, emulator} x
+  {c1, c2, c3, c3o, c4, c4o, c5, c7, c7o, c8} x 3 seeds (strong / full, Adagrad teacher lr 0.3), seed 0 first;
+  results tmp/results/m5_{f1,emulator}, learners tmp/meta/m5_*.
+- 2026-11-15: M5 grid done (60 jobs, 180 records, 0 diverged; tmp/results/m5_summary_*.md). No meta cell beats
+  classical Adagrad (10 gradients); cell 5 regularises against model error (better true-model forecasts); cell 7
+  improves the first guess with 0 model calls; cells 3, 4 fail (identifiability, obs input does not help); cell 8
+  overfits (train MSE 0.03 vs val 2.3) and fails at inference. Findings appended.
+- 2026-11-15: Pilot: paper-ready reporting + intuitive impact (speed-up factor) + explicit reference in every table.
+  src/measure_grad_cost.py -> tmp/results/grad_cost_ratio.json (gradient = 3.7 forward runs F1, 2.5 F2; emulator
+  forward 4x slower than analytic L63). report_m5.py rewritten: every row vs reference "classical Adagrad, exact
+  adjoint, same false model", cost in forward-run equivalents, speed-up x, method | ref columns, n/a when < 50 %
+  reach the target. findings.md rewritten paper-ready (summary, methods, Tables 1-3 with references and speed-ups,
+  findings, limitations).
