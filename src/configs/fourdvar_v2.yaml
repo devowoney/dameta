@@ -1,5 +1,6 @@
 # Classical 4D-Var on D1 v2 (M5 blueprint: model-error-isolated BICE / BPE; memory/branches/m5-meta-grid/blueprint.md)
 seed: 42
+data_prefix: l63v2           # l63v2 (obs every 10 steps) | l63v2d (dense: obs every step, src/make_dense_obs.py)
 split: val                    # val (lr tuning) | test | test_ood   (never tune on test*)
 pattern: full                 # full | x_only
 constraint: strong            # strong | weak   (bpe: strong only)

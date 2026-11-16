@@ -80,7 +80,9 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     torch.set_default_dtype(torch.float64)
     assert cfg.problem in ("bice", "bpe")
     assert cfg.problem == "bice" or (cfg.model == "f1" and cfg.constraint == "strong"), "BPE: model f1, strong only"
-    ds = xr.load_dataset(Path(cfg.data_dir) / f"l63v2_{split}_seed{cfg.seed}.nc")
+    # feature flag `data_prefix` (2026-11-16): l63v2 = D1 v2 (obs every 10 steps); l63v2d = dense obs (every step,
+    # src/make_dense_obs.py). The background (first guess, B) is the D1 v2 one in both cases.
+    ds = xr.load_dataset(Path(cfg.data_dir) / f"{cfg.get('data_prefix', 'l63v2')}_{split}_seed{cfg.seed}.nc")
     x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
     if n_cases is not None:
         n = int(n_cases)

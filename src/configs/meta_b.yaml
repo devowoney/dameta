@@ -119,6 +119,7 @@ learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J
 
 # ---- D1 v2 (M5 blueprint; dataset=v2): model-error-isolated setting, see configs/fourdvar_v2.yaml -------------------
 dataset: v1                   # v1 (D1) | v2 (D1 v2: lagged false-model first guess, hybrid B, false models)
+data_prefix: l63v2            # v2 data file prefix: l63v2 (obs every 10 steps) | l63v2d (dense, every step)
 model: f1                     # v2 estimation model: truth | f1 | emulator (uses `emulator`)
 background: null              # v2 lagged background name (null = f1 for truth / f1, emulator name for emulator)
 problem: bice                 # v2: bice | bpe

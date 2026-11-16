@@ -272,3 +272,54 @@ D1 v2 makes cell 1 a valid speed-up on F1 (×1.28, same reach, IC and forecast a
 the quality rule), closing ~50 % of the Adagrad → L-BFGS gap, but it does not reach the classical floor, and the
 setting does not transfer to F2 or out of distribution without re-tuning. (iii) A speed-weighted loss makes cell 5
 descend faster (×1.5–1.6) but a fixed-budget learned update reaches the 1 % target in only ~70 % of cases.
+
+## Addendum (2026-11-16) — model behaviour and dense observations (strong / full, test, classical only)
+**Models.** From the same IC, F1 and F2 depart from the truth by |err| > 1 after a median 0.36 TU (i.e. inside the
+window); F2 reproduces F1 closely. All three have the same IC-error growth rate (0.89–0.90 per TU) and predictability
+(~7.7 TU from |δ| = 10⁻³). Figures: tmp/figs/models_{timeseries,phase,sensitivity}.
+**Dense observations (111 obs over the same 1.1-TU window, nested with D1 v2).** Target J ≤ 1.01 J*, J* = best final
+J of Adagrad / GD / L-BFGS / Gauss-Newton per case; medians over 200 cases; table tmp/results/dense/summary_test.md.
+| obs | model | Adagrad | GD | L-BFGS | GN (grad-eq) | IC RMSE (L-BFGS) | true-model fc @1 TU (L-BFGS) |
+|---|---|---|---|---|---|---|---|
+| 12 | F1 | 10 | 125 | 6 | 8.0 | 0.415 | 2.43 |
+| 111 | F1 | 28 | 228 | 6 | 8.3 | 0.376 | 2.30 |
+| 12 | E1 | 9 | 99 | 5 | 16.2 | 0.306 | 0.65 |
+| 111 | E1 | 7 | 112 | 5 | 17.1 | 0.196 | 0.25 |
+Dense obs make first-order optimizers on F1 ~3× slower (Adagrad 10 → 28 gradients, reached 0.82) while L-BFGS stays at
+6: the room for a learned optimizer grows against Adagrad (×4.7 floor) but not against L-BFGS. With the true model
+the extra obs cut the 1-TU forecast error 2.6×; with F1 only 5 % — the analysis is limited by model error, not by
+observations. GN costs ~8 gradient-equivalents per iteration here because the 3 tangent-linear runs use forward-mode AD.
+
+### Dense observations, weak constraint (test, full obs; eta at every obs time; table summary_test_weak.md)
+| config (control size) | model | Adagrad (reached) | GD (reached) | L-BFGS | IC RMSE (L-BFGS) | fc @1 TU est. model / true model (L-BFGS) |
+|---|---|---|---|---|---|---|
+| sparse, σ_q 0.1 (36) | F1 | 41 (0.83) | 122 (0.74) | 9 | 0.406 | 1.24 / 2.48 |
+| dense, σ_q 0.1 (333) | F1 | 113 (0.60) | 591 (0.29) | 17 | 0.313 | 0.95 / 2.68 |
+| dense, σ_q 0.1/√10 (333) | F1 | 242 (0.57) | 148 (0.19) | 14 | 0.332 | 0.73 / 2.31 |
+| sparse, σ_q 0.1 | E1 | 45.5 (0.87) | 294 (0.72) | 9 | 0.320 | 0.65 |
+| dense, σ_q 0.1 | E1 | 188 (0.53) | 627 (0.27) | 20 | 0.268 | 0.65 |
+| dense, σ_q 0.1/√10 | E1 | 304 (0.48) | 672 (0.16) | 14 | 0.210 | 0.32 |
+Weak constraint with dense observations is the first configuration where first-order optimizers break down: Adagrad
+needs 113–304 gradients and reaches the 1 % target in only about half the cases; GD in under 30 %. L-BFGS needs 14–20 (all
+cases). Against Adagrad, a learned optimizer now has about 8–17× room; against L-BFGS the floor is still about 15 gradients.
+The η increments improve the OPERATIONAL F1 forecast (1.24 → 0.73 with the scaled Q) but not the true-model forecast of the
+F1 analysis: η fits F1's tendency error in-window, which does not carry into a true-model forecast. With the true model
+(no model error) σ_q 0.1 lets η fit observation noise (forecast 0.65 vs 0.25 in strong); the scaled Q is better (0.32).
+
+### Meta-learners on the long problem: dense obs, weak constraint (F1, σ_q 0.1/√10, control 333; 3 seeds)
+Cost = F1 forward-run equivalents to J ≤ 1.01 J* (1 gradient = 3.82 forward runs; J* = best classical final J);
+median over cases reaching the target, so it must be read with "reached". Tables: tmp/results/dense/meta_summary_*.md.
+| method | test: cost / reached / IC / fc@1TU F1 | test_ood: cost / reached / IC / fc@1TU F1 |
+|---|---|---|
+| Adagrad (exact adjoint, M5 reference) | 924 / 0.57 / 0.447 / 0.92 | 1518 / 0.54 / 0.225 / 1.26 |
+| L-BFGS | 53 / 1.00 / 0.332 / 0.73 | 53 / 1.00 / 0.260 / 1.03 |
+| cell 1 (Δ learned optimizer) | 178 ± 2 / 0.78 / 0.377 / 0.88 | 268 ± 15 / 0.68 / 0.277 / 1.57 |
+| cell 5 (learned optimization, K 20) | 25 ± 2 / 0.53 / 0.382 / 0.82 | 38 ± 2 / 0.17 / 0.253 / 1.43 |
+| cell 8a (adjoint-free learned gradient) | 225 ± 8 / 0.57 / 0.448 / 0.92 | 390 ± 4 / 0.54 / 0.224 / 1.25 |
+Fixed budget of 20 gradients (test): fraction at target Adagrad 0.06, cell 1 0.17, cell 5 0.43–0.48, L-BFGS 0.65;
+median excess J/J* − 1: 0.064, 0.052, 0.011–0.012, 0.0035. On the long problem the learned optimizers now clearly beat their
+teacher: cell 1 reaches the target in 0.78 vs 0.57 of the cases at ~5× fewer model runs (consistent over seeds), cell 8a
+reproduces Adagrad (same reached / IC / forecast) with forward runs only (×4.1 fewer model runs) but is ×0.64 in
+wall-clock on L63 (the learned adjoint recursion over 110 intervals costs more than the exact L63 adjoint). Cell 5 is the
+fastest method of all for the first ~10 gradients (below the L-BFGS curve) but its fixed K = 20 stops it at ~1 % above J*,
+and it does not generalise to test_ood (reached 0.17, 53 worse basins). No learner beats L-BFGS at reaching the 1 % target.

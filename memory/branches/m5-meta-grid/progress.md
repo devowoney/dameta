@@ -109,3 +109,30 @@
   fc 1.96 vs 1.99. Cell 5 sum-loss: 3-6 gradients but reached 0.39-0.73 (none eligible); c5_sum_K20 taken to test.
   Final 3-seed F1/F2 test + test_ood runs launched (src/scripts/speed_sweep_final.txt).
 - 2026-11-16: Final 3-seed test/test_ood of retuned cell 1 and cell 5 (sum loss K 20), F1/F2 -> findings Table 7.
+- 2026-11-16: Model behaviour check (pilot): src/viz_models.py -> tmp/figs/models_{timeseries,phase,sensitivity}.png/pdf,
+  tmp/results/models_behaviour.json. Same IC: F1 / F2 leave the truth (|err| > 1) after a median 0.36 / 0.35 TU; median
+  |err| at 1.1 TU 1.81 / 1.85. F2 tracks F1 closely. IC sensitivity (|delta| 1e-3): separation growth 0.896 truth /
+  0.888 F1 / 0.903 F2 per TU (fit 1-8 TU), median separation > 1 at 7.7 TU for all three.
+- 2026-11-16: Dense-obs test (pilot): D1 v2-dense = same window 1.1 TU, obs EVERY step (111 obs), nested with D1 v2 (same
+  12 obs + noise) and same F1 background (src/make_dense_obs.py -> tmp/data/l63v2d_*; fourdvar_v2.yaml flag `dataset`).
+  src/run_dense_v2.py: strong/full BICE, F1 and E1, Adagrad / GD (dense lr by val rule: F1 0.1 / 1e-4, E1 0.3 / 1e-4),
+  L-BFGS, Gauss-Newton; src/report_dense.py -> tmp/results/dense/summary_test.{md,csv}, tmp/figs/dense_{framework_case0,
+  curves,forecast}. J* = best final J of the 4 optimizers. Dense obs: Adagrad 10 -> 28 gradients (F1), GD 125 -> 228,
+  L-BFGS 6 -> 6, GN 1 iteration (~8 grad-eq with forward-mode TL). E1 IC 0.31 -> 0.20, fc@1TU 0.65 -> 0.25; F1 IC 0.42 ->
+  0.38, fc@1TU (true model) 2.43 -> 2.30: model error dominates, extra obs barely help F1.
+- 2026-11-16: Dense-obs WEAK constraint (pilot): run_dense_v2.py --constraint weak [--sigma_q] [--lbfgs_evals 150]
+  (eta at every obs time: dense control 333 vs sparse 36; GN skipped). Configs: sparse sq 0.1, dense sq 0.1, dense sq
+  0.1/sqrt10 (same variance per 0.1 TU); F1 and E1. Dense val sweeps: no lr converges in 1000 its; selected Adagrad
+  0.03, GD 1e-5. report_dense.py --constraint weak -> summary_test_weak.{md,csv}, dense_*_weak figs; framework fig now
+  uses L-BFGS (converged) analyses for strong and weak. F1 gradients to 1 %: Adagrad 41 -> 113 / 242, L-BFGS 9 -> 17 / 14;
+  Adagrad reaches 0.60 / 0.57, GD 0.29 / 0.19. Operational F1 fc@1TU 1.24 -> 0.95 / 0.73; true-model fc of F1 analyses
+  unchanged (2.3-2.7).
+- 2026-11-16: Meta-learners on dense-obs WEAK (F1, sigma_q 0.1/sqrt10, control 333; teacher Adagrad lr 0.03 = classical
+  val selection): src/scripts/dense_meta_{job,run}.sh (group m5dw_f1), cells c1 (retuned M5 speed config), c5 (sum loss
+  K 20), c8a (samples_per_case 8 to keep ~0.9 M interval Jacobians; epochs 100 after a 200-case check showed val rel.
+  err still falling at 20 epochs; final val rel. err 0.06, cos 0.9997) x 3 seeds, test + test_ood. Classical test_ood
+  baseline via run_dense_v2.py --lr_adagrad 0.03 --lr_gd 1e-5 (timing json now split-suffixed; test-split val-sweep
+  record kept in timing_*_q0.0316228_test_with_val_sweep.json). Meta config: new key data_prefix (renamed from my
+  earlier `dataset` flag, which collided with meta_b's dataset=v2). Reports: src/report_dense_meta.py ->
+  tmp/results/dense/meta_summary_{test,test_ood}.md, tmp/figs/dense_meta_curves_*; src/measure_cell8_cost_dense.py ->
+  cell8a iteration 179 ms vs exact gradient 114 ms (x0.64 wall-clock).
