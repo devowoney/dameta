@@ -96,7 +96,8 @@ unroll:                       # learned optimization (M5 cells 5 = use_grad true
   batch: 100
   grad_clip: 1.0
   seed: 0
-  n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0))
+  n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0); loss=sum: mean over m)
+  loss: final                 # final: J(x^K)/J(x^0) | sum: mean_m J(x^m)/J(x^0) (speed-weighted, 2026-11-16)
 
 learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J_o from one forward run)
   surrogate_emulator: rho275  # supervision = this emulator's autodiff (grad J_o, or one-interval Jacobians)

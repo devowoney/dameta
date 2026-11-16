@@ -206,3 +206,69 @@ tmp/results/cell8a_speedups.json; 54 + 18 records, 0 diverged.
 ### Verification
 tests: test_d1v2 10/10, test_cost_v2 9/9, test_cell8 8/8, test_m5 18/18, test_m4 19/19, test_m2 8/8; v2 runner
 refactor bit-identical; all 72 classical and 180 meta records verified readable, 0 diverged.
+
+### Table 5 — G1 gradient fidelity vs the TRUE dynamics (test, strong / full; src/measure_g1_v2.py, 2026-11-16)
+G1 = cos(g_method, ∇J_true) with J_true = same problem (obs, first guess, hybrid B) with the true L63 (ρ 28), at the
+same control: first guess x0_b [true IC x0_t]; median over 200 cases (learned gradients: mean over 3 seeds).
+| method | G1 cos @x0_b | G1 cos @x0_t | rel. err @x0_b |
+|---|---|---|---|
+| E1 true model | 1 | 1 | 0 |
+| F1 exact adjoint (= GD, Adagrad, FD; cells 1/2/5 on F1) | 0.992 | 0.881 | 0.55 |
+| F1 weak constraint (full control) | 0.983 | 0.720 | 0.55 |
+| F2 emulator adjoint (cells 1/2/5 on F2) | 0.990 | 0.862 | 0.58 |
+| hybrid (F1 problem, emulator adjoint) | 0.990 | 0.862 | 0.58 |
+| BPE, x0-sensitivity of L63(θ_a) | **0.997** | 0.819 | **0.46** |
+| cell 8 v1 F1 / F2 | 0.13 / 0.15 | 0.14 / 0.13 | 1.25 / 1.08 |
+| cell 8a F1 / F2 | 0.990 / 0.990 | 0.877 / 0.855 | 0.55 / 0.58 |
+Every false-model gradient (incl. cell 8a) shares the same ~0.99 / ~0.87 similarity to the true sensitivity: the
+learned adjoint adds no error beyond the false model's own. Only BPE (recovered ρ) improves it at the first guess.
+Near x0_t ∇J_true is small, so relative errors there are large (2–4) and the cosine is noisier.
+
+### Table 6 — Total time: time-to-solution per 200-case batch and one-off training (test, strong / full; 2026-11-16)
+Time-to-solution = iterations to J ≤ 1.01 J* × measured time per iteration on one core for 200 cases (gradient: true
+0.099 s, F1 0.102 s, F2 0.283 s; cell-8a iteration F1 0.035 s, F2 0.125 s; network cost of cells 1/2/5 not included,
+small). Gain vs the F1 Adagrad exact-adjoint reference (1.02 s). One-off training time = meta-training on 1000
+training ICs (+ validation-epoch selection), mean over 3 seeds, from tmp/logs/m5_*_val.log (log span minus the
+inference wall time; jobs ran concurrently, so this is an upper bound; cell 8a excludes the Jacobian-pair collection);
+emulator training 637 s. Break-even = cases needed before the saved time pays back the training time.
+The record attribute wall_s is NOT comparable across methods (batched runs continue to max_iter for the slowest
+case; meta runs also compute the exact gradient for diagnostics).
+| method | time / 200 cases | gain vs F1 ref | gain vs same-model ref | one-off training | break-even |
+|---|---|---|---|---|---|
+| E1 true model | 0.84 s | ×1.20 | — | — | — |
+| F1 Adagrad exact (ref) | 1.02 s | ×1 | ×1 | — | — |
+| F1 GD | 12.3 s | ×0.08 | ×0.08 | — | — |
+| F1 weak constraint | 4.98 s | ×0.20 | — | — | — |
+| F1 finite differences | 1.95 s | ×0.52 | ×0.52 | — | — |
+| hybrid (emulator adjoint) | 1.86 s | ×0.55 | ×0.55 | 637 s (emulator) | never |
+| F2 emulator Adagrad | 2.83 s | ×0.36 | ×1 | 637 s (emulator) | never |
+| BPE | 9.70 s | ×0.10 | — | — | — |
+| cell 1 F1 / F2 | 0.89 / 3.00 s | ×1.15 / ×0.34 | ×1.13 / ×0.94 | 1671 / 1994 s | ~2.6 M cases / never |
+| cell 2 F1 / F2 | 1.34 s / n/a | ×0.76 / n/a | ×0.77 / n/a | 830 / 810 s | never |
+| cell 5 F1 / F2 | 0.78 / 2.31 s | ×1.31 / ×0.44 | ×1.30 / ×1.25 | 1678 / 2511 s | ~1.4 M / ~1.0 M cases |
+| cell 7 F1 / F2 | ≈ 0 (network only) | — (IC 0.52, not converged) | — | 99 / 183 s | — |
+| cell 8a F1 / F2 | **0.35 / 1.25 s** | **×2.91** / ×0.82 | **×2.94 / ×2.26** | 685 (+637 emulator) / 657 s | ~0.4 M / ~83 k cases |
+
+### Table 7 — Meta-speed check: classical floor and speed-retuned learners (strong / full; 2026-11-16)
+Gradients (forward + adjoint) to J ≤ 1.01 J*, median; learners mean over 3 seeds. Selection on F1 val only (rule:
+reached ≥ ref − 0.05, true-model fc ≤ 1.05 × ref, then fewest gradients): cell 1 → Adagrad teacher lr 0.1, stretch
+bound 10, 2 align steps (val 7 vs 9.5 gradients, ×1.36); cell 5 with the speed loss mean_m J(x^m)/J(x^0) reached the
+target in only 39–73 % of val cases for every K / step scale (none eligible; K 20 carried to test as the most reliable).
+The F2 runs reuse the F1-selected settings (no F2 val tuning).
+| method | F1 test: gradients (speed-up) | reached | IC | true fc @1TU | worse basins | F2 test: gradients (speed-up) | reached | true fc |
+|---|---|---|---|---|---|---|---|---|
+| reference Adagrad lr 0.3 | 10 (×1) | 0.995 | 0.425 | 2.47 | 0 | 10 (×1) | 1.00 | 2.50 |
+| floor: L-BFGS, strong Wolfe (no training) | **5.5 (×1.82)** | 1.00 | 0.415 | — | 0 | **6 (×1.67)** | 1.00 | — |
+| floor: Gauss-Newton | 1 iteration ≈ 3–4 gradient-eq. (×~3; ×1.3 measured with autodiff TL) | 0.99 | 0.418 | — | 1 | 1 iteration (×~3; ×1.0 measured) | 0.99 | — |
+| cell 1, M5 (D1 v1 settings) | 8.8 (×1.13) | 0.84 | 0.453 | 2.86 | 27 | 10.7 (×0.94) | 0.92 | 2.52 |
+| **cell 1, retuned** | **7.8 (×1.28)** | **0.97** | **0.423** | 2.53 (+2 %) | 5 | 6.3 (×1.58) | 0.67 | 3.23 (+29 %) |
+| cell 5, M5 (J(x^K), K 20) | 7.7 (×1.30) | 0.62 | 0.472 | 2.37 | 42 | 8 (×1.25) | 0.62 | 2.30 |
+| cell 5, speed loss K 20 | 6.3 (×1.58) | 0.71 | 0.455 | 2.41 | 27 | 6.7 (×1.50) | 0.70 | 2.38 |
+test_ood (F1): reference 12 gradients; retuned cell 1 9.8 (×1.22) but reached 0.90, fc 2.38 vs 1.47; cell 5 speed loss
+13.2, reached 0.44. Sources: tmp/results/speed_{f1,emulator}_{val,test,test_ood}.{md,csv}, floor_v2_test.json.
+**Findings.** (i) The headroom over Adagrad is small: a classical quasi-Newton method needs 5.5–6 gradients (×1.7–1.8)
+with no training and full reliability; Gauss-Newton needs one iteration (~×3 in model-run equivalents). (ii) Retuning on
+D1 v2 makes cell 1 a valid speed-up on F1 (×1.28, same reach, IC and forecast as the reference — the M5 setting failed
+the quality rule), closing ~50 % of the Adagrad → L-BFGS gap, but it does not reach the classical floor, and the
+setting does not transfer to F2 or out of distribution without re-tuning. (iii) A speed-weighted loss makes cell 5
+descend faster (×1.5–1.6) but a fixed-budget learned update reaches the 1 % target in only ~70 % of cases.

@@ -98,3 +98,14 @@
   measure_cell8_cost.py per config), IC within +-0.01 of the exact-adjoint reference, forecast within +-2 % (one
   -7 %), reached within 0.03. FD weak x0.05. findings.md: summary + Table 4 + finding 4 + limitations updated;
   strong/full wall-clock numbers harmonised to the same-session measurement (x2.94 / x2.26).
+- 2026-11-16: src/measure_g1_v2.py -> tmp/results/g1_v2.json: G1 (cos to true-model gradient) for all M5 methods; findings Table 5.
+- 2026-11-16: findings Table 6: time-to-solution + one-off meta-training time and break-even (from tmp/logs).
+- 2026-11-16: Meta-speed check (pilot request). Step 1 floor: src/run_floor_v2.py -> tmp/results/floor_v2_test.json
+  (test, strong/full): Adagrad 10 gradients; L-BFGS (strong Wolfe) 5.5 F1 / 6 F2 gradients (reached 1.00, IC 0.415 /
+  0.402); Gauss-Newton 1 iteration (= 1 gradient + 3 TL runs ~ 3-4 gradient-equivalents; reached 0.99). Floor ~2-3x.
+  Step 2: cell-5 option unroll.loss=sum (meta_a.py); sweep scripts src/scripts/speed_sweep_{job,run}.sh +
+  speed_sweep_f1_val.txt; report src/report_speed.py. Val F1 (200 cases; classical val refs re-run on 200):
+  selected cell 1 = Adagrad teacher lr 0.1, stretch bound 10, align 2: 7 vs 9.5 gradients (x1.36), reached 0.965,
+  fc 1.96 vs 1.99. Cell 5 sum-loss: 3-6 gradients but reached 0.39-0.73 (none eligible); c5_sum_K20 taken to test.
+  Final 3-seed F1/F2 test + test_ood runs launched (src/scripts/speed_sweep_final.txt).
+- 2026-11-16: Final 3-seed test/test_ood of retuned cell 1 and cell 5 (sum loss K 20), F1/F2 -> findings Table 7.

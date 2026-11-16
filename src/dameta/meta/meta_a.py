@@ -5,6 +5,7 @@ budget of K steps and trained end-to-end on the 4D-Var cost after K steps (unsup
     x^0 = first guess (background control: x0_b, eta = 0)          -- the learner never sees x0_b as an input
     x^{m+1} = x^m - Delta_m,   Delta_m = step_scale * ctrl_std * U_theta(x_std^m [, g_std^m], emb(m) [, obs])
     loss    = mean_cases J(x^K) / J(x^0)                              (scale-free across cases)
+              loss="sum" (2026-11-16 speed variant): mean_cases mean_{m=1..K} J(x^m) / J(x^0)
 
 use_grad=True  (cell 5): g^m = grad J(x^m), one gradient evaluation (forward + adjoint) per step; first order by
                default (g^m enters as data: the theta-gradient flows through the x-path and through the final J
@@ -43,6 +44,7 @@ class UnrollConfig:
     batch: int = 100
     grad_clip: float = 1.0
     seed: int = 0
+    loss: str = "final"              # final: J(x^K)/J(x^0) | sum: mean_m J(x^m)/J(x^0), m = 1..K (rewards fast descent)
 
 
 def standardize_grad(g: torch.Tensor, d: int) -> torch.Tensor:
@@ -80,6 +82,7 @@ class LearnedOptimization:
         K = self.cfg.K if K is None else K
         obs = self._obs(cost)
         x, xs, js, gs, n_grad = x0, [x0.detach()], [], [], 0
+        xg = []                                           # graph-carrying iterates (train, loss="sum")
         for m in range(K):
             g = None
             if self.cfg.use_grad:
@@ -98,14 +101,19 @@ class LearnedOptimization:
                 gs.append(cost.grad(x.detach())[1])      # diagnostics only (not counted)
             x = x - self.delta(x, g, m, obs)
             xs.append(x.detach())
-        return {"x": x, "xs": xs, "J_grad": js, "n_grad": n_grad, "g": gs}
+            if train:
+                xg.append(x)
+        return {"x": x, "xs": xs, "J_grad": js, "n_grad": n_grad, "g": gs, "x_graph": xg}
 
     # ---- training --------------------------------------------------------------------------------------------
     def loss(self, cost: FourDVarCost, x0: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             j0 = cost(*cost.unpack(x0))
-        xk = self.unroll(cost, x0, train=True)["x"]
-        return (cost(*cost.unpack(xk)) / j0.clamp_min(TINY)).mean()
+        r = self.unroll(cost, x0, train=True)
+        if getattr(self.cfg, "loss", "final") == "sum":
+            jm = torch.stack([cost(*cost.unpack(xm)) for xm in r["x_graph"]], 1)       # [n, K]
+            return (jm / j0.clamp_min(TINY)[:, None]).mean()
+        return (cost(*cost.unpack(r["x"])) / j0.clamp_min(TINY)).mean()
 
     def fit(self, make_cost: Callable, x0_train: torch.Tensor, val_cost: FourDVarCost, x0_val: torch.Tensor,
             log=None) -> list:
