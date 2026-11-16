@@ -98,8 +98,14 @@ unroll:                       # learned optimization (M5 cells 5 = use_grad true
   seed: 0
   n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0))
 
-learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J_o from innovations)
-  surrogate_emulator: rho275  # supervision target = this emulator's autodiff grad J_o
+learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J_o from one forward run)
+  surrogate_emulator: rho275  # supervision = this emulator's autodiff (grad J_o, or one-interval Jacobians)
+  arch: adjoint               # adjoint (learned interval TL operators + exact adjoint recursion) | mlp (first version)
+  data: sampled               # sampled (B-shaped controls around the first guess) | trajectory (hybrid-run states)
+  loss: jacobian              # adjoint arch: jacobian (local, default) | gradient
+  samples_per_case: 64
+  perturb_scales: [0.5, 1.0, 2.0]
+  traj_stride: 0               # sampled data: also every n-th hybrid-run state (0 = none: 45x cheaper collection)
   hidden: 128
   n_layers: 3
   emb_dim: 8

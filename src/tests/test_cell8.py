@@ -1,5 +1,5 @@
 """
-M5 cell 8 verification — adjoint-free learned gradient (innovations from a forward run -> grad J_o).
+M5 cell 8 verification — adjoint-free learned gradient (forward run -> grad J_o): MLP and adjoint-structured versions.
 
 Plain-python test script. Run from the project root (after gen_data_v2.py and tune_hybrid_b.py):
     python src/tests/test_cell8.py
@@ -19,8 +19,9 @@ from dameta.data.background import load_hybrid_background  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 from dameta.meta import control_stats  # noqa: E402
-from dameta.meta.learned_gradient import (LGConfig, analytic_grad, build_lg, collect_pairs,  # noqa: E402
-                                          forward_features, jo_grad, run_learned_gradient)
+from dameta.meta.learned_gradient import (LGConfig, adjoint_recursion, analytic_grad, build_lg,  # noqa: E402
+                                          collect_pairs, collect_sampled_pairs, forward_run, jo_grad,
+                                          run_learned_gradient)
 
 torch.set_default_dtype(torch.float64)
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,7 +36,7 @@ RESULTS = []
 
 def report(name, value, thr, ok):
     RESULTS.append(ok)
-    print(f"[{'PASS' if ok else 'FAIL'}] {name:<66s} value={value:.3e}  ({thr})")
+    print(f"[{'PASS' if ok else 'FAIL'}] {name:<70s} value={value:.3e}  ({thr})")
     assert ok, name
 
 
@@ -51,16 +52,41 @@ def ctrl(cost, x0_b):
     return cost.pack(x0_b, torch.zeros(len(x0_b), CFG.n_obs - 1, 3) + 0.01) if cost.weak else x0_b.clone()
 
 
+def stats():
+    return control_stats(torch.tensor(xr.load_dataset(D / "l63v2_train_seed42.nc").x_true.values), CFG.n_obs, 0.1,
+                         False)
+
+
 def test_forward_and_decomposition():
     for weak in (False, True):
         cf, _, xb = costs("val", 8, weak)
         c = ctrl(cf, xb)
-        j, obs = forward_features(cf, c)
-        e1 = float((j - cf(*cf.unpack(c))).abs().max())
+        f = forward_run(cf, c)
+        e1 = float((f["J"] - cf(*cf.unpack(c))).abs().max())
         g = analytic_grad(cf, c) + jo_grad(cf, c)
         e2 = float(((g - cf.grad(c)[1]).norm(dim=1) / cf.grad(c)[1].norm(dim=1)).max())
         report(f"forward J == cost J; grad_b(+q) analytic + grad_o == full grad ({'weak' if weak else 'strong'})",
-               max(e1, e2), "< 1e-12, obs 72 features", e1 < 1e-12 and e2 < 1e-12 and obs.shape[1] == 72)
+               max(e1, e2), "< 1e-12, obs 72 features", e1 < 1e-12 and e2 < 1e-12 and f["obs"].shape[1] == 72)
+
+
+def test_adjoint_recursion_exact():
+    """With the EXACT one-interval tangent-linear operators of F1, the recursion == autodiff grad J_o."""
+    def interval(x):
+        for _ in range(CFG.obs_every):
+            x = F1.step(x)
+        return x
+    jac = torch.func.vmap(torch.func.jacrev(interval))
+    for weak in (False, True):
+        cf, _, xb = costs("val", 8, weak)
+        c = ctrl(cf, xb)
+        f = forward_run(cf, c)
+        n_int = f["x_obs"].shape[1] - 1
+        a = torch.stack([jac(f["x_obs"][:, i]) for i in range(n_int)], 1)
+        g = adjoint_recursion(a, f["r"], weak)
+        g_ex = jo_grad(cf, c)
+        rel = float(((g - g_ex).norm(dim=1) / g_ex.norm(dim=1)).max())
+        report(f"adjoint recursion with exact interval Jacobians == autodiff grad J_o ({'weak' if weak else 'strong'})",
+               rel, "< 1e-10", rel < 1e-10)
 
 
 class _Oracle:
@@ -68,7 +94,7 @@ class _Oracle:
     def __init__(self, cost):
         self.cost = cost
 
-    def grad_obs(self, c, k, obs):
+    def grad_obs(self, c, k, fwd, weak=False):
         return jo_grad(self.cost, c)
 
 
@@ -81,23 +107,36 @@ def test_oracle_reproduces_classical():
     report("oracle grad_o: loop == classical Adagrad; 1 fwd per iteration, 0 grads", err, "< 1e-9", err < 1e-9 and same)
 
 
-def test_pairs_and_fit():
-    cf, ce, xb = costs("train", 32)
-    p = collect_pairs(cf, ce, xb, "adagrad", 0.3, max_iter=60)
+def test_trajectory_pairs():
+    cf, ce, xb = costs("train", 16)
+    p = collect_pairs(cf, ce, xb, "adagrad", 0.3, max_iter=40)
     k0 = p["k"] == 0
-    e0 = float((p["x"][k0] - xb).abs().max())
-    e1 = float((p["g"][k0] - jo_grad(ce, xb)).abs().max())
-    report("pairs: k=0 states == first guess; targets == emulator grad J_o", max(e0, e1), "== 0", max(e0, e1) == 0)
+    e = max(float((p["x"][k0] - xb).abs().max()), float((p["g"][k0] - jo_grad(ce, xb)).abs().max()))
+    report("trajectory pairs: k=0 states == first guess; targets == emulator grad J_o", e, "== 0", e == 0)
+
+
+def test_sampled_pairs_and_adjoint_fit():
+    cfg = LGConfig(arch="adjoint", data="sampled", samples_per_case=32, traj_stride=0, epochs=20, batch_size=256)
+    cf, ce, xb = costs("train", 64)
+    p = collect_sampled_pairs(cf, ce, xb, "adagrad", 0.3, cfg)
+    i0 = slice(0, 32)                                         # the 32 samples of case 0
+    b = torch.linalg.inv(cf.b_inv[0])
+    emp = torch.cov((p["x"][i0] - xb[0]).T)
+    ratio = float(torch.trace(emp) / torch.trace(b))
+    e = float((p["g"][:64] - jo_grad(FourDVarCost(EMU.step, ce.y[:2].repeat_interleave(32, 0), ce.mask,
+                                                  ce.x0_b[:2].repeat_interleave(32, 0), CFG,
+                                                  b_inv=ce.b_inv[:2].repeat_interleave(32, 0)), p["x"][:64])).abs().max())
+    report("sampled pairs: 64 x 32 controls, B-shaped spread (tr ratio), emulator targets", ratio,
+           "0.3 < ratio < 6, targets exact", p["x"].shape[0] == 64 * 32 and 0.3 < ratio < 6 and e == 0)
     cv, cev, xbv = costs("val", 16)
-    pv = collect_pairs(cv, cev, xbv, "adagrad", 0.3, max_iter=60)
-    m, s = control_stats(torch.tensor(xr.load_dataset(D / "l63v2_train_seed42.nc").x_true.values), CFG.n_obs, 0.1,
-                         False)
-    lg = build_lg(3, CFG.n_obs, LGConfig(epochs=15, batch_size=256), m, s, p)
+    pv = collect_sampled_pairs(cv, cev, xbv, "adagrad", 0.3, cfg)
+    m, s = stats()
+    lg = build_lg(3, CFG.n_obs, cfg, m, s, p)
     hist = lg.fit(p, pv)
-    print("       val cos", [round(h["val_cos_med"], 3) for h in hist[::3]])
+    print("       val cos", [round(h["val_cos_med"], 3) for h in hist[::4]], " val rel err",
+          [round(h["val_relerr_med"], 3) for h in hist[::4]])
     best = max(h["val_cos_med"] for h in hist)
-    report("cell-8 fit smoke: val median cos(g_o^, emulator grad_o) improves", best, f"> {hist[0]['val_cos_med']:.3f}",
-           best > hist[0]["val_cos_med"])
+    report("adjoint-structured fit smoke: val median cos(g_o^, emulator grad_o)", best, "> 0.9", best > 0.9)
 
 
 if __name__ == "__main__":

@@ -36,7 +36,8 @@ from dameta.meta import (LearnedOptimization, MetaB, MetaBConfig, MetaBSup, Stre
 from dameta.meta.meta_b_lookahead import LookaheadConfig, collect_lookahead_pairs, fit_lookahead  # noqa: E402
 from dameta.meta.meta_greedy import GreedyConfig, GreedyOptimizer, build_greedy, run_greedy  # noqa: E402
 from dameta.meta.learned_gradient import (LearnedGradient, LGConfig, build_lg,  # noqa: E402
-                                          collect_pairs as collect_lg_pairs, run_learned_gradient)
+                                          collect_pairs as collect_lg_pairs,
+                                          collect_sampled_pairs as collect_lg_sampled, run_learned_gradient)
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 from run_4dvar import analysis_record, build_step  # noqa: E402  (also registers the project_root resolver)
 
@@ -194,14 +195,18 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
         for p in emu.parameters():
             p.requires_grad_(False)
         va = problem(cfg, "val", lk["n_val_ic"])
-        pairs = collect_lg_pairs(make_tr(), ptr.cost_with(emu.step), xb_tr, cfg.method, float(cfg.lr),
-                                 int(cfg.max_iter), float(cfg.tol))
-        vpairs = collect_lg_pairs(va.cost(), va.cost_with(emu.step), va.x0_b, cfg.method, float(cfg.lr),
-                                  int(cfg.max_iter), float(cfg.tol))
         lcfg = LGConfig(**{k: lk[k] for k in LGConfig.__dataclass_fields__})
+        if lcfg.data == "sampled":                 # decorrelated B-shaped controls (+ thinned hybrid trajectory)
+            mk = lambda pb, xb: collect_lg_sampled(pb.cost(), pb.cost_with(emu.step), xb, cfg.method,  # noqa: E731
+                                                   float(cfg.lr), lcfg, int(cfg.max_iter), float(cfg.tol))
+        else:                                      # states of the adjoint-free hybrid classical run
+            mk = lambda pb, xb: collect_lg_pairs(pb.cost(), pb.cost_with(emu.step), xb, cfg.method,  # noqa: E731
+                                                 float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
+        pairs, vpairs = mk(ptr, xb_tr), mk(va, va.x0_b)
         learner = build_lg(d, ptr.ccfg.n_obs, lcfg, ctrl_mean, ctrl_std, pairs)
-        log.info("learned-gradient pairs: train %d, val %d", len(pairs["k"]), len(vpairs["k"]))
-        hist = learner.fit(pairs, vpairs, log=lambda h: log.info("epoch %s", {
+        log.info("learned-gradient (%s, %s) pairs: train %d, val %d", lcfg.arch, lcfg.data, len(pairs["k"]),
+                 len(vpairs["k"]))
+        hist = learner.fit(pairs, vpairs, weak=cfg.constraint == "weak", log=lambda h: log.info("epoch %s", {
             k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
         info = {"train_history": hist, "train_pairs": int(len(pairs["k"])), "train_grad_evals": 0}
     else:

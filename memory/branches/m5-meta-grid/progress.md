@@ -74,3 +74,27 @@
   adjoint, same false model", cost in forward-run equivalents, speed-up x, method | ref columns, n/a when < 50 %
   reach the target. findings.md rewritten paper-ready (summary, methods, Tables 1-3 with references and speed-ups,
   findings, limitations).
+- 2026-11-15: Cell 8 fix. learned_gradient.py: arch "adjoint" = learned one-interval tangent-linear operators
+  A_theta(state) = I + MLP(state) combined by the EXACT adjoint recursion (linear in the innovations); data "sampled" =
+  decorrelated controls x0_b + s L z (s in 0.5/1/2, LL^T = B) with emulator targets; loss "jacobian" = match each
+  operator to the emulator's one-interval Jacobian at the forward-run state (gradient-level training through 11
+  chaotic Jacobians was ill-conditioned: val cos 0.39); epoch selection on median relative gradient error (MSE
+  dominated by a few far-from-minimum cases). test_cell8 8/8 (recursion with exact Jacobians == autodiff 1e-15,
+  strong / weak; adjoint fit smoke val cos 0.997 on 64 cases). Smoke on F1 (100 train cases): 47/50 converged,
+  IC 0.450 (fg 0.606), fc 1.52 ~ classical; old cell 8 diverged. Trajectory states cost 45x the collection time ->
+  traj_stride 0 default. Old c8 pinned (arch mlp, data trajectory); new cell c8a launched: F1 / F2 x 3 seeds.
+- 2026-11-15: Cell 8a done (F1 / F2 x 3 seeds, 18 records, 0 diverged). Val: median rel. error of grad J_o 0.059 F1 /
+  0.015 F2, cos 0.9998. Test vs classical Adagrad (exact adjoint): x3.66 / x2.41 model-run speed-up, measured
+  wall-clock x2.93 / x2.28 (src/measure_cell8_cost.py: network 9 ms per 200 cases); IC 0.418 / 0.419 (ref 0.425 /
+  0.419), reached 1.00, forecast +-1 %, 0 worse basins; test_ood x3.42 / x2.36, IC 0.421 / 0.433. report_m5.py lists
+  8 (v1) and 8a (v2). findings.md updated (summary, methods, Table 2 rows, Table 3 v1 vs v2, findings 4 and 9).
+- 2026-11-16: Cell 8a smoke on weak/full and strong/x_only (F1, F2; 100 train cases): 0 diverged, 76-96 % converged,
+  final J ~ classical (18.02 vs 18.00 weak F1). Full runs launched: 18 jobs = {weak/full, strong/x_only, weak/x_only}
+  x {F1, F2} x 3 seeds (m5_grid_job.sh now takes [constraint] [pattern]; lr 0.3 strong / 0.1 weak).
+  report_m5.py: --configs, per-config output files; FIXED a glob that would have mixed other configurations' meta
+  records into the strong/full rows (strong/full table verified unchanged). measure_cell8_cost.py loops over configs.
+- 2026-11-16: Cell 8a weak/full, strong/x_only, weak/x_only done (18 jobs, 54 records, 0 diverged). All configs:
+  model-run speed-up x2.4-3.9, wall-clock x2.3-2.9 (consistent same-session formula, tmp/results/cell8a_speedups.json;
+  measure_cell8_cost.py per config), IC within +-0.01 of the exact-adjoint reference, forecast within +-2 % (one
+  -7 %), reached within 0.03. FD weak x0.05. findings.md: summary + Table 4 + finding 4 + limitations updated;
+  strong/full wall-clock numbers harmonised to the same-session measurement (x2.94 / x2.26).

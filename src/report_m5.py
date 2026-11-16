@@ -41,7 +41,8 @@ CELLS = {"c1": ("1", "learned optimizer, unsupervised, gradient (Δ delta)", "gr
          "c5": ("5", "learned optimization (K 20 unroll), gradient", "grad"),
          "c7": ("7", "learned optimization (K 20 unroll), no gradient", "none"),
          "c7o": ("7+obs", "  same + observations as input", "none"),
-         "c8": ("8", "adjoint-free learned gradient", "fwd")}
+         "c8": ("8", "adjoint-free learned gradient (v1: MLP on innovations)", "fwd"),
+         "c8a": ("8a", "adjoint-free learned gradient (v2: learned TL operators + adjoint recursion)", "fwd")}
 
 
 def load(path):
@@ -76,57 +77,69 @@ def fmt_speed(ref_cost, cost, reached, unit):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--splits", nargs="+", default=["test", "test_ood"])
+    ap.add_argument("--configs", nargs="+", default=["strong/full", "weak/full", "strong/x_only", "weak/x_only"])
     a = ap.parse_args()
     ratio = json.loads((RES / "grad_cost_ratio.json").read_text())
-    for split in a.splits:
-        rows = []
-        for model in ("f1", "emulator"):
-            r_g = ratio[f"{model}/strong"]["ratio"]
-            cls = {m: load(next((RES / f"v2_{model}").glob(f"bice_strong_full_{m}_lr*_{split}.nc"))) for m in ("adagrad", "gd")}
-            ref = cls["adagrad"]
-            j_star = np.nanmin(np.stack([d.J_iter.values[:, -1] for d in cls.values()]), 0)
-            R = stats(ref, j_star, r_g, ref)
-            ref_name = "classical Adagrad (exact adjoint)"
-
-            def add(cell, method, s, unit, seeds, sd=None):
-                rows.append({"false model": "F1 (rho 27.5)" if model == "f1" else "F2 (emulator)", "cell": cell,
-                             "method": method, "reference": ref_name, "seeds": seeds,
-                             "cost (fwd-eq) method | ref": f"{s['cost']:.0f} | {R['cost']:.0f}",
-                             "speed-up": fmt_speed(R["cost"], s["cost"], s["reached"], unit),
-                             "reached method | ref": f"{s['reached']:.2f} | {R['reached']:.2f}",
-                             "IC RMSE method | ref": f"{s['ic']:.3f}" + (f" ± {sd['ic']:.3f}" if sd else "")
-                             + f" | {R['ic']:.3f}",
-                             "fc true model @1TU method | ref": f"{s['fc']:.2f} | {R['fc']:.2f}",
-                             "Δ fc vs ref": f"{100 * (s['fc'] / R['fc'] - 1):+.0f} %",
-                             "worse basins": f"{s['worse']:.0f}"})
-
-            add("-", "classical GD (exact adjoint)", stats(cls["gd"], j_star, r_g, ref), "grad", 1)
-            if model == "f1":
-                emu_g = ratio["emulator/strong"]["gradient_s"] / ratio["f1/strong"]["forward_s"]
-                for g, label in (("fd", "classical Adagrad, finite-difference gradient (no adjoint)"),
-                                 ("hybrid", "classical Adagrad, hybrid gradient (F1 cost + emulator adjoint)")):
-                    p = next((RES / f"v2_f1_{g}").glob(f"bice_strong_full_adagrad_lr*_{split}.nc"), None)
-                    d = load(p) if p else None
-                    if d is not None:
-                        unit = float(d.attrs["fwd_per_gradient"]) if g == "fd" else 1.0 + emu_g
-                        add("-", label, stats(d, j_star, unit, ref), "fwd", 1)
-            for c, (cell, label, unit) in CELLS.items():
-                per = [s for s in (load(p) for p in sorted((RES / f"m5_{model}").glob(f"*_{c}_s[0-9]_{split}.nc")))
-                       if s is not None]
-                if not per:
+    for cp in a.configs:
+        con, pat = cp.split("/")
+        for split in a.splits:
+            rows = []
+            for model in ("f1", "emulator"):
+                r_g = ratio[f"{model}/{con}"]["ratio"]
+                found = {m: next((RES / f"v2_{model}").glob(f"bice_{con}_{pat}_{m}_lr*_{split}.nc"), None)
+                         for m in ("adagrad", "gd")}
+                if found["adagrad"] is None:
                     continue
-                u = r_g if unit == "grad" else (1.0 if unit == "fwd" else 0.0)
-                df = pd.DataFrame([stats(d, j_star, u, ref) for d in per])
-                add(cell, label, df.mean().to_dict(), unit, len(per), df.std().to_dict() if len(per) > 1 else None)
-        out = pd.DataFrame(rows)
-        path = RES / f"m5_summary_{split}"
-        out.to_csv(path.with_suffix(".csv"), index=False)
-        md = (f"## M5 meta grid on D1 v2 (strong / full) — {split}\n\nReference for every row: classical Adagrad with "
-              f"the exact adjoint on the same false model. Cost = model runs to reach 1 % of J*, in forward-run "
-              f"equivalents (gradient = {ratio['f1/strong']['ratio']:.1f} fwd on F1, "
-              f"{ratio['emulator/strong']['ratio']:.1f} on F2).\n\n" + to_markdown(out) + "\n")
-        path.with_suffix(".md").write_text(md)
-        print(md)
+                cls = {m: load(p) for m, p in found.items() if p is not None}
+                ref = cls["adagrad"]
+                j_star = np.nanmin(np.stack([d.J_iter.values[:, -1] for d in cls.values()]), 0)
+                R = stats(ref, j_star, r_g, ref)
+                ref_name = "classical Adagrad (exact adjoint)"
+
+                def add(cell, method, s, unit, seeds, sd=None):
+                    rows.append({"false model": "F1 (rho 27.5)" if model == "f1" else "F2 (emulator)", "cell": cell,
+                                 "method": method, "reference": ref_name, "seeds": seeds,
+                                 "cost (fwd-eq) method | ref": f"{s['cost']:.0f} | {R['cost']:.0f}",
+                                 "speed-up": fmt_speed(R["cost"], s["cost"], s["reached"], unit),
+                                 "reached method | ref": f"{s['reached']:.2f} | {R['reached']:.2f}",
+                                 "IC RMSE method | ref": f"{s['ic']:.3f}" + (f" ± {sd['ic']:.3f}" if sd else "")
+                                 + f" | {R['ic']:.3f}",
+                                 "fc true model @1TU method | ref": f"{s['fc']:.2f} | {R['fc']:.2f}",
+                                 "Δ fc vs ref": f"{100 * (s['fc'] / R['fc'] - 1):+.0f} %",
+                                 "worse basins": f"{s['worse']:.0f}"})
+
+                if "gd" in cls:
+                    add("-", "classical GD (exact adjoint)", stats(cls["gd"], j_star, r_g, ref), "grad", 1)
+                if model == "f1":
+                    emu_g = ratio[f"emulator/{con}"]["gradient_s"] / ratio[f"f1/{con}"]["forward_s"]
+                    for g, label in (("fd", "classical Adagrad, finite-difference gradient (no adjoint)"),
+                                     ("hybrid", "classical Adagrad, hybrid gradient (F1 cost + emulator adjoint)")):
+                        p = next((RES / f"v2_f1_{g}").glob(f"bice_{con}_{pat}_adagrad_lr*_{split}.nc"), None)
+                        d = load(p) if p else None
+                        if d is not None:
+                            unit = float(d.attrs["fwd_per_gradient"]) if g == "fd" else 1.0 + emu_g
+                            add("-", label, stats(d, j_star, unit, ref), "fwd", 1)
+                for c, (cell, label, unit) in CELLS.items():
+                    # constraint / pattern in the glob: records of other configurations must never be mixed in
+                    paths = sorted((RES / f"m5_{model}").glob(f"*_{con}_{pat}_adagrad_*_{c}_s[0-9]_{split}.nc"))
+                    per = [s for s in (load(p) for p in paths) if s is not None]
+                    if not per:
+                        continue
+                    u = r_g if unit == "grad" else (1.0 if unit == "fwd" else 0.0)
+                    df = pd.DataFrame([stats(d, j_star, u, ref) for d in per])
+                    add(cell, label, df.mean().to_dict(), unit, len(per), df.std().to_dict() if len(per) > 1 else None)
+            if not rows:
+                continue
+            out = pd.DataFrame(rows)
+            suffix = "" if cp == "strong/full" else f"_{con}_{pat}"
+            path = RES / f"m5_summary{suffix}_{split}"
+            out.to_csv(path.with_suffix(".csv"), index=False)
+            md = (f"## M5 meta grid on D1 v2 ({con} / {pat}) — {split}\n\nReference for every row: classical Adagrad "
+                  f"with the exact adjoint on the same false model. Cost = model runs to reach 1 % of J*, in forward-run "
+                  f"equivalents (gradient = {ratio[f'f1/{con}']['ratio']:.1f} fwd on F1, "
+                  f"{ratio[f'emulator/{con}']['ratio']:.1f} on F2).\n\n" + to_markdown(out) + "\n")
+            path.with_suffix(".md").write_text(md)
+            print(md)
 
 
 if __name__ == "__main__":
