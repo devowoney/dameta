@@ -136,3 +136,11 @@
   earlier `dataset` flag, which collided with meta_b's dataset=v2). Reports: src/report_dense_meta.py ->
   tmp/results/dense/meta_summary_{test,test_ood}.md, tmp/figs/dense_meta_curves_*; src/measure_cell8_cost_dense.py ->
   cell8a iteration 179 ms vs exact gradient 114 ms (x0.64 wall-clock).
+- 2026-11-17: (1) L-BFGS teacher: ReferenceStep method 'lbfgs' = batched L-BFGS direction (two-loop, history 10, pairs
+  from the moves actually applied, s.y > 0 kept), fixed step, no line search (src/dameta/da/reference_step.py;
+  src/tests/test_lbfgs_teacher.py 2/2). Classical fixed-step L-BFGS: run_dense_v2.py --only_lbfgsfix, val rule ->
+  lr 0.0333 (records *_lbfgsfix_*). Cell 1 with this teacher (dense_meta_job.sh METHOD=lbfgs LR=0.0333333, group
+  m5dwL_f1). First run: theta became NaN in episode 5 (a few cases blew up under the x11 stretch) -> FIX in
+  MetaB.meta_update: non-finite cases excluded from the meta losses, non-finite loss / grads skip the Adam step (no
+  effect on finite runs; test_m4 11/11). Re-run: 3 seeds OK, 3-6 % cases diverge at inference.
+  (2) Cell 5 K 50 (c5k50, 3 seeds). report_dense_meta.py: + fixed-step L-BFGS row (also in J*), c1L, c5k50 rows.

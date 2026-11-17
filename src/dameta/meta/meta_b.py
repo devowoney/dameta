@@ -120,6 +120,20 @@ class MetaB:
                 rho = (g * step).sum(1) / (prev["g"] * step).sum(1)
                 diag["rho"] = float(rho[torch.isfinite(rho)].median()) if torch.isfinite(rho).any() else float("nan")
 
+        # NaN guard (2026-11-17, found with the L-BFGS teacher): a diverged case (non-finite control or gradient, now or
+        # at the previous move) is left out of every meta loss, and a non-finite meta loss skips the Adam step, so one
+        # blown-up case can no longer turn theta into NaN. No effect when all cases are finite (Adagrad runs).
+        ok = torch.isfinite(c).all(1) & torch.isfinite(g).all(1) & torch.isfinite(f).all(1)
+        if prev is not None:
+            ok = ok & torch.isfinite(prev["c"]).all(1) & torch.isfinite(prev["f"]).all(1)
+        if not ok.any():
+            self.net.eval()
+            return diag
+        if not ok.all():
+            c, g, f, g_std = c[ok], g[ok], f[ok], g_std[ok]
+            if prev is not None:
+                prev = {**prev, "c": prev["c"][ok], "g_std": prev["g_std"][ok], "f": prev["f"][ok],
+                        "denom": prev["denom"][ok]}
         self.net.train()
         for m in range(cfg.num_meta_steps):
             if prev is None or m < cfg.grad_align_steps:
@@ -138,8 +152,13 @@ class MetaB:
                 l_perf = (-(g * total).sum(1) / prev["denom"]).mean()
                 l_meta = l_meta + cfg.w_perf_delta * l_perf
                 diag["L_perf"] = float(l_perf.detach())
+            if not torch.isfinite(l_meta):
+                break                                            # NaN guard: never step on a non-finite loss
             l_meta.backward()
             torch.nn.utils.clip_grad_norm_(params, max_norm=cfg.grad_clip_norm)
+            if not all(torch.isfinite(p.grad).all() for p in params if p.grad is not None):
+                self.opt.zero_grad()
+                break
             self.opt.step()
             diag["L_align"], diag["L_reg"] = float(l_align.detach()), float(l_reg.detach())
         self.net.eval()

@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tmp/results/dense"
 SPARSE_LR = {"strong": {"f1": {"adagrad": 0.3, "gd": 0.001}, "truth": {"adagrad": 1.0, "gd": 0.001}},
              "weak": {"f1": {"adagrad": 0.1, "gd": 0.001}, "truth": {"adagrad": 0.1, "gd": 0.0003}}}   # M5 val rule
-GRID = {"adagrad": [0.03, 0.1, 0.3, 1.0, 3.0], "gd": [1e-5, 3e-5, 1e-4, 3e-4, 1e-3]}
+GRID = {"adagrad": [0.03, 0.1, 0.3, 1.0, 3.0], "gd": [1e-5, 3e-5, 1e-4, 3e-4, 1e-3], "lbfgs": [0.1, 0.3, 0.5, 1.0]}
 MAX_ITER, TOL = 1000, 1e-6
 
 
@@ -169,11 +169,27 @@ def main():
     ap.add_argument("--lbfgs_evals", type=int, default=100)
     ap.add_argument("--lr_adagrad", type=float, default=None)   # skip the val sweep (lr already selected)
     ap.add_argument("--lr_gd", type=float, default=None)
+    # 2026-11-16: classical counterpart of the L-BFGS teacher = batched L-BFGS with a FIXED step (no line search,
+    # ReferenceStep method 'lbfgs'); lr by the val rule over GRID['lbfgs']; records <tag>_lbfgsfix_<split>.nc
+    ap.add_argument("--only_lbfgsfix", action="store_true")
+    ap.add_argument("--splits", nargs="+", default=["test", "test_ood"])
     a = ap.parse_args()
     weak = a.constraint == "weak"
     torch.set_default_dtype(torch.float64)
     torch.set_num_threads(1)
     OUT.mkdir(parents=True, exist_ok=True)
+    if a.only_lbfgsfix:
+        for dataset in a.datasets:
+            tag = f"{dataset}_{a.model}" + (f"_weak_q{a.sigma_q:g}" if weak else "")
+            lr, sweep = sweep_lr(dataset, a.model, "lbfgs", a.constraint, a.sigma_q)
+            print(f"{tag} fixed-step L-BFGS: selected lr {lr}", flush=True)
+            for split in a.splits:
+                P = setup(dataset, a.model, split, a.constraint, a.sigma_q)
+                jh, xh, c_a = opt_classical(P["cost"], P["x0_b"], "lbfgs", lr)
+                write(OUT / f"{tag}_lbfgsfix_{split}.nc", jh, xh, {"lr": lr, "unit_grad_eq": 1.0}, c_a)
+                print(f"{tag} lbfgsfix {split} done", flush=True)
+            (OUT / f"lbfgsfix_{tag}.json").write_text(json.dumps({"lr": lr, "val_sweep": sweep}, indent=1))
+        return
     for dataset in a.datasets:
         lrs, sweeps = {}, {}
         for method in ("adagrad", "gd"):

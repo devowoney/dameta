@@ -3,7 +3,8 @@ Meta-learners vs classical optimizers on the DENSE-obs WEAK-constraint problem (
 eta at every step -> control 333, sigma_q = 0.1 / sqrt 10; src/scripts/dense_meta_job.sh, src/run_dense_v2.py).
 
 Same conventions as report_m5.py, two references:
-    J* = best final J of the classical optimizers (Adagrad, GD, L-BFGS) on the same case; target J <= 1.01 J*
+    J* = best final J of the classical optimizers (Adagrad, GD, L-BFGS line search, L-BFGS fixed step) on the same
+         case; target J <= 1.01 J*
     cost = model runs to the target in FORWARD-RUN EQUIVALENTS of F1: 1 gradient (forward + adjoint) = r forward runs
            (r measured in this configuration: gradient time / forward time, tmp/results/dense/timing_*.json);
            cell 8a = 1 forward run per iteration; network evaluations are NOT counted (see the wall-clock note)
@@ -34,12 +35,20 @@ import report_dense as RD  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 RES, FIGS = ROOT / "tmp/results/dense", ROOT / "tmp/figs"
 TAG = "l63v2d_f1_weak_q0.0316228"
-GROUP = ROOT / "tmp/results/m5dw_f1"
-CLASSICAL = {"adagrad": "Adagrad (exact adjoint) — reference", "gd": "GD", "lbfgs": "L-BFGS (strong floor)"}
-CELLS = {"c1": ("delta", "cell 1: learned optimizer, Δ inner loss (1 gradient / it)", "grad"),
-         "c5": ("unroll", "cell 5: learned optimization, K 20 unroll (1 gradient / step)", "grad"),
-         "c5k50": ("unroll", "cell 5: learned optimization, K 50 unroll", "grad"),
-         "c8a": ("learned_grad", "cell 8a: adjoint-free learned gradient + Adagrad (1 forward / it)", "fwd")}
+CLASSICAL = {"adagrad": "Adagrad (exact adjoint) — reference", "gd": "GD",
+             "lbfgs": "L-BFGS, strong-Wolfe line search (strong floor)",
+             "lbfgsfix": "L-BFGS, fixed step lr 0.033 (no line search; = L-BFGS teacher)"}
+# key -> (record variant, label, cost unit, result group, teacher "<method>_lr<lr>", record cell tag)
+CELLS = {"c1": ("delta", "cell 1: learned optimizer, Adagrad teacher (1 gradient / it)", "grad", "m5dw_f1",
+                "adagrad_lr0.03", "c1"),
+         "c1L": ("delta", "cell 1: learned optimizer, L-BFGS teacher (1 gradient / it)", "grad", "m5dwL_f1",
+                 "lbfgs_lr0.0333333", "c1"),
+         "c5": ("unroll", "cell 5: learned optimization, K 20 unroll (1 gradient / step)", "grad", "m5dw_f1",
+                "adagrad_lr0.03", "c5"),
+         "c5k50": ("unroll", "cell 5: learned optimization, K 50 unroll", "grad", "m5dw_f1", "adagrad_lr0.03",
+                   "c5k50"),
+         "c8a": ("learned_grad", "cell 8a: adjoint-free learned gradient + Adagrad (1 forward / it)", "fwd",
+                 "m5dw_f1", "adagrad_lr0.03", "c8a")}
 F = 500
 
 
@@ -58,8 +67,9 @@ def main():
     for split in a.splits:
         ds = xr.load_dataset(ROOT / f"tmp/data/l63v2d_{split}_seed42.nc")
         xt, L = ds.x_true.values, int(ds.attrs["window"])
-        cl = {o: xr.load_dataset(RES / f"{TAG}_{o}_{split}.nc") for o in CLASSICAL}
-        jfin = np.stack([cl[o].J_hist.values[:, -1] for o in CLASSICAL])
+        cl = {o: xr.load_dataset(RES / f"{TAG}_{o}_{split}.nc") for o in CLASSICAL
+              if (RES / f"{TAG}_{o}_{split}.nc").exists()}
+        jfin = np.stack([cl[o].J_hist.values[:, -1] for o in cl])     # J* over ALL classical runs present
         jstar = np.nanmin(np.where(np.isfinite(jfin), jfin, np.nan), 0)
         rows, curves = [], {}
 
@@ -70,8 +80,8 @@ def main():
                     "fc_est": float(np.nanmedian(fc_est)), "fc_true": float(np.nanmedian(fc_true))}
 
         ref = {}
-        for o, lab in CLASSICAL.items():
-            d = cl[o]
+        for o, d in cl.items():
+            lab = CLASSICAL[o]
             x0, eta = RD.split_control(RD.control(d), ds, True)
             fc = RD.forecasts(x0, eta, "f1", ds)
             truth_fc = xt[:, L:L + F + 1]
@@ -80,10 +90,10 @@ def main():
             ref[o] = s
             rows.append({"method": lab, "seeds": 1, **s})
             curves[o] = (np.arange(d.sizes["k"]) * r, np.nanmedian(d.J_hist.values / jstar[:, None] - 1, 0))
-        for c, (var, lab, unit) in CELLS.items():
+        for c, (var, lab, unit, grp, teach, ctag) in CELLS.items():
             per = []
             for s_ in range(3):
-                p = GROUP / f"{var}_weak_full_adagrad_lr0.03_{c}_s{s_}_{split}.nc"
+                p = ROOT / "tmp/results" / grp / f"{var}_weak_full_{teach}_{ctag}_s{s_}_{split}.nc"
                 if not p.exists():
                     continue
                 d = xr.load_dataset(p)
@@ -119,7 +129,8 @@ def main():
         print(md)
         fig, ax = plt.subplots(figsize=(8, 5))
         sty = {"adagrad": ("tab:blue", "-"), "gd": ("tab:gray", "-"), "lbfgs": ("tab:green", "-"),
-               "c1": ("tab:orange", "--"), "c5": ("tab:purple", "--"), "c5k50": ("tab:pink", "--"),
+               "c1": ("tab:orange", "--"), "c1L": ("tab:brown", "--"),
+               "lbfgsfix": ("tab:olive", "-"), "c5": ("tab:purple", "--"), "c5k50": ("tab:pink", "--"),
                "c8a": ("tab:red", "--")}
         for k_, (x, y) in curves.items():
             lab = CLASSICAL.get(k_, CELLS.get(k_, ("", k_))[1])

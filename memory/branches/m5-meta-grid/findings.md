@@ -323,3 +323,18 @@ reproduces Adagrad (same reached / IC / forecast) with forward runs only (×4.1 
 wall-clock on L63 (the learned adjoint recursion over 110 intervals costs more than the exact L63 adjoint). Cell 5 is the
 fastest method of all for the first ~10 gradients (below the L-BFGS curve) but its fixed K = 20 stops it at ~1 % above J*,
 and it does not generalise to test_ood (reached 0.17, 53 worse basins). No learner beats L-BFGS at reaching the 1 % target.
+
+#### L-BFGS teacher and K = 50 (same problem; fraction of cases at the 1 % target after N gradients)
+| N | Adagrad | L-BFGS fixed step (teacher) | L-BFGS line search | cell 1, Adagrad teacher | cell 1, L-BFGS teacher | cell 5 K 20 | cell 5 K 50 |
+|---|---|---|---|---|---|---|---|
+| test 50 | 0.12 | 0.17 | 0.93 | 0.41 | 0.59 | 0.45 | 0.51 |
+| test 100 | 0.17 | 0.53 | 0.98 | 0.51 | 0.72 | 0.45 | 0.51 |
+| test_ood 50 | 0.05 | 0.05 | 0.95 | 0.18 | 0.61 | 0.07 | 0.06 |
+| test_ood 100 | 0.12 | 0.34 | 0.97 | 0.45 | 0.75 | 0.07 | 0.06 |
+A better teacher gives a better learned optimizer: cell 1 on the L-BFGS direction learns the step length (median
+stretch near its ×11 cap: an effective lr ~0.37 vs the stable fixed lr 0.033) and beats its own teacher (×2.8 fewer model
+runs to the target) and the Adagrad-teacher cell 1 (reached 0.84 vs 0.78; IC 0.350 vs 0.377), and it generalises
+out of distribution (test_ood reached 0.84, ×11.6 vs Adagrad), but 3–6 % of cases diverge (no line-search safeguard)
+and it stays ~2.4× costlier than L-BFGS with a line search. Cell 5 with K = 50 does not close its gap: final cost
+unchanged, 0.60 reached vs 0.53 on test, and test_ood worse (0.21 reached, 71 worse basins, IC 0.38 > first guess
+0.27). The learned unroll is fast but does not generalise.

@@ -18,12 +18,13 @@ delta.train_seed=$S";;
 learned_grad.traj_stride=0 learned_grad.samples_per_case=8 learned_grad.seed=$S";;
   *) echo "unknown cell $C"; exit 1;;
 esac
-LR=0.03; SQ=0.0316227766
+# teacher: METHOD / LR env overrides (default Adagrad 0.03; L-BFGS teacher: METHOD=lbfgs LR=<fixed-step val lr>)
+METHOD=${METHOD:-adagrad}; LR=${LR:-0.03}; SQ=0.0316227766
 G=${GROUP:-m5dw_f1}; T=_${C}_s$S
-COMMON="dataset=v2 data_prefix=l63v2d model=f1 constraint=weak pattern=full cost.sigma_q=$SQ method=adagrad lr=$LR \
+COMMON="dataset=v2 data_prefix=l63v2d model=f1 constraint=weak pattern=full cost.sigma_q=$SQ method=$METHOD lr=$LR \
 result_group=$G tag=$T $X $EXTRA"
 VAR=$(echo "$X" | sed 's/.*variant=\([a-z_]*\).*/\1/')
-CKPT=tmp/meta/$G/${VAR}_weak_full_adagrad_lr${LR}${T}.pt
+CKPT=tmp/meta/$G/${VAR}_weak_full_${METHOD}_lr${LR}${T}.pt
 mkdir -p tmp/logs
 [ -f $CKPT ] || $P src/run_meta_b.py $COMMON split=val > tmp/logs/${G}${T}_val.log 2>&1 || exit 1
 for SP in $SPLITS; do
