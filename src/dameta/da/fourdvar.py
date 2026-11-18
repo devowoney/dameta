@@ -25,6 +25,12 @@ from .cost import FourDVarCost
 from .reference_step import ReferenceStep
 
 
+def _pad_cum(hist, max_iter):
+    """[n, max_iter + 1] cumulative counts per iterate, padded with the last value."""
+    h = torch.stack(hist, 1)
+    return torch.cat([h, h[:, -1:].expand(-1, max_iter + 1 - h.shape[1])], 1).numpy()
+
+
 def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: float, max_iter: int = 1000,
                  tol: float = 1e-6, eta_init: Optional[torch.Tensor] = None, on_step=None) -> dict:
     """on_step(k, c, g, active): optional read-only hook before each move (M4: teacher trajectories for Meta-B)."""
@@ -32,7 +38,10 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
     if cost.weak and eta_init is None:
         eta_init = torch.zeros(n, cost.cfg.n_obs - 1, 3, dtype=x0_init.dtype)   # first guess: perfect model
     c = cost.pack(x0_init, eta_init).detach().clone()
-    teacher = ReferenceStep(c, method=method, lr=lr)
+    teacher = ReferenceStep(c, method=method, lr=lr, cost=cost if method == "lbfgs_wolfe" else None)
+    # grad_cum[k]: gradient evaluations (forward + adjoint) spent to reach iterate k = outer gradients at iterates
+    # 0..k-1 not already known from the teacher's line search + line-search trials of moves 1..k
+    outer, grad_hist = torch.zeros(n, dtype=torch.long), [torch.zeros(n, dtype=torch.long)]
 
     active = torch.ones(n, dtype=c.dtype)                 # 1 = still iterating
     n_evals = torch.zeros(n, dtype=torch.long)
@@ -42,6 +51,7 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
     for _ in range(max_iter):
         j, g = cost.grad(c)
         n_evals += active.long()
+        outer += (active.bool() & ~teacher.is_free(c)).long()
         j_hist.append(j.clone() if j_prev is None else torch.where(active.bool(), j, j_hist[-1]))
         if j_prev is not None:                                      # per-case stopping rule on relative decrease
             rel = (j_prev - j).abs() / j_prev.abs().clamp_min(1e-300)
@@ -51,7 +61,9 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
             break
         if on_step is not None:
             on_step(len(x0_hist) - 1, c, g, active)
-        f = teacher(c, g, active)
+        with torch.no_grad():
+            f = teacher(c, g, active, j=j)
+        grad_hist.append(outer + teacher.n_ls)
         cos_hist.append(torch.nn.functional.cosine_similarity(f, g, dim=1))
         c = c - f
         x0_hist.append(c[:, :3].clone())
@@ -76,6 +88,7 @@ def run_fourdvar(cost: FourDVarCost, x0_init: torch.Tensor, method: str, lr: flo
         "x0_iter": x0_iter.numpy(), "J_iter": j_iter.numpy(), "cos_step_grad": cos.numpy(),
         "n_grad_evals": n_evals.numpy(), "converged": ((active == 0) & (n_evals < max_iter) & torch.isfinite(j_final)).numpy(),
         "x0_a": c[:, :3].numpy(), "wall_s": wall, "control_final": c.numpy(),
+        "grad_cum": _pad_cum(grad_hist, max_iter),
     }
     if cost.weak:
         out["eta_final"] = cost.unpack(c)[1].numpy()

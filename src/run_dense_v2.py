@@ -128,11 +128,13 @@ def opt_gn(cost: FourDVarCost, xb, max_iter=30):
     return np.stack(jh, 1), np.stack(xh, 1), n_bt / max_iter
 
 
-def write(path, jh, xh, attrs, c_a=None):
+def write(path, jh, xh, attrs, c_a=None, grad_cum=None):
     c_a = xh[:, -1] if c_a is None else c_a
-    xr.Dataset({"J_hist": (("ic", "k"), jh), "x_hist": (("ic", "k", "var"), xh),
-                "x0_a": (("ic", "var"), xh[:, -1]), "control_a": (("ic", "ctrl"), c_a)},
-               coords={"var": ["x", "y", "z"]}, attrs=attrs).to_netcdf(path)
+    dv = {"J_hist": (("ic", "k"), jh), "x_hist": (("ic", "k", "var"), xh),
+          "x0_a": (("ic", "var"), xh[:, -1]), "control_a": (("ic", "ctrl"), c_a)}
+    if grad_cum is not None:                     # cumulative gradient evaluations per iterate (lbfgs_wolfe)
+        dv["grad_cum"] = (("ic", "k"), grad_cum)
+    xr.Dataset(dv, coords={"var": ["x", "y", "z"]}, attrs=attrs).to_netcdf(path)
 
 
 def sweep_lr(dataset, model, method, constraint="strong", sigma_q=0.1):
@@ -172,12 +174,26 @@ def main():
     # 2026-11-16: classical counterpart of the L-BFGS teacher = batched L-BFGS with a FIXED step (no line search,
     # ReferenceStep method 'lbfgs'); lr by the val rule over GRID['lbfgs']; records <tag>_lbfgsfix_<split>.nc
     ap.add_argument("--only_lbfgsfix", action="store_true")
+    # 2026-11-17: consistency check of the strong-Wolfe teacher (ReferenceStep 'lbfgs_wolfe') run alone: must
+    # reproduce the reference opt_lbfgs; records <tag>_lbfgswolfecheck_<split>.nc with grad_cum
+    ap.add_argument("--only_wolfe_check", action="store_true")
     ap.add_argument("--splits", nargs="+", default=["test", "test_ood"])
     a = ap.parse_args()
     weak = a.constraint == "weak"
     torch.set_default_dtype(torch.float64)
     torch.set_num_threads(1)
     OUT.mkdir(parents=True, exist_ok=True)
+    if a.only_wolfe_check:
+        for dataset in a.datasets:
+            tag = f"{dataset}_{a.model}" + (f"_weak_q{a.sigma_q:g}" if weak else "")
+            for split in a.splits:
+                P = setup(dataset, a.model, split, a.constraint, a.sigma_q)
+                r = run_fourdvar(P["cost"], P["x0_b"], "lbfgs_wolfe", 1.0, 150, TOL)
+                write(OUT / f"{tag}_lbfgswolfecheck_{split}.nc", r["J_iter"], r["x0_iter"],
+                      {"lr": 1.0, "unit_grad_eq": 1.0}, r["control_final"], r["grad_cum"])
+                print(f"{tag} wolfe check {split} done: median gradient evals {np.median(r['grad_cum'][:, -1])}",
+                      flush=True)
+        return
     if a.only_lbfgsfix:
         for dataset in a.datasets:
             tag = f"{dataset}_{a.model}" + (f"_weak_q{a.sigma_q:g}" if weak else "")

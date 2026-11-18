@@ -144,3 +144,36 @@
   MetaB.meta_update: non-finite cases excluded from the meta losses, non-finite loss / grads skip the Adam step (no
   effect on finite runs; test_m4 11/11). Re-run: 3 seeds OK, 3-6 % cases diverge at inference.
   (2) Cell 5 K 50 (c5k50, 3 seeds). report_dense_meta.py: + fixed-step L-BFGS row (also in J*), c1L, c5k50 rows.
+- 2026-11-17: Missing-physics diagnostic (src/diag_eta_physics.py; dense weak F1 sq 0.1/sqrt10, test): eta of the
+  converged L-BFGS analysis vs the known missing physics M_true(x) - M_F1(x) (= dt * 0.5 x in y): corr y 0.43 (0.50 at
+  true states) but regression slope 0.05 (Q prior shrinks it ~20x); x / z components are artifacts (rms 0.003 / 0.0085
+  vs missing 0.002 / 0.0024). Adagrad eta (not converged): corr <= 0.15, rms 5-10x the signal = mostly artifacts.
+  User redirect: priorities are (1) amortized inference cost of the L-BFGS-taught learner over many cases,
+  (2) whether a meta-learner gives more realistic analyses (recover missing physics, remove artifacts).
+- 2026-11-17: Cell 1 with the L-BFGS LINE-SEARCH teacher (user request: cell 1 beats its teacher, so give it the
+  strongest one). ReferenceStep method 'lbfgs_ls' = L-BFGS direction + batched backtracking Armijo (c1 1e-4, shrink
+  0.5, <= 20 trials; first step lr along g/|g|, then 1); every trial forward of an active case counted (n_fwd ->
+  record ls_fwd_cum [ic, k], cumulative per iterate) in run_fourdvar / run_meta_b. Classical teacher alone:
+  run_dense_v2.py --only_lbfgsls -> <tag>_lbfgsls_<split>.nc (lr 1, no tuning). Cell 1: dense_meta_job.sh
+  METHOD=lbfgs_ls LR=1 GROUP=m5dwLS_f1 (same c1 config), list src/scripts/dense_meta_c1LS.txt. report_dense_meta.py:
+  rows lbfgsls / c1LS, cost = iterations x r + line-search forwards (cost_to). test_lbfgs_teacher.py +1 test (3/3).
+- 2026-11-17: Results cell 1 / Armijo L-BFGS teacher (3 seeds, test + test_ood) -> findings "Cell 1 with the L-BFGS
+  line-search teacher": 60 vs teacher 63 vs strong Wolfe 53 fwd-eq (test), 66 / 66 / 53 (test_ood); reached 0.95 vs 0.98;
+  learned stretch median x1.35. No gain over a line-search teacher. M4 regression test 19/19 after the teacher change.
+- 2026-11-17: User: no new method; the reference is strong-Wolfe L-BFGS (opt_lbfgs). Armijo teacher 'lbfgs_ls' REMOVED
+  (code, report rows, findings subsection; its records stay in tmp/results/m5dwLS_f1 and dense/*_lbfgsls_* for
+  the record only: cell 1 60 vs teacher 63 fwd-eq, learned stretch x1.35, no gain). Replaced by ReferenceStep
+  'lbfgs_wolfe' = one torch.optim.LBFGS(strong_wolfe) iteration with opt_lbfgs settings (torch's _strong_wolfe; first
+  trial batched, failing cases per case); test_lbfgs_wolfe_matches_torch_lbfgs checks identical iterates. Cost
+  bookkeeping grad_cum [ic, k]: outer gradient not counted when the control equals the last line-search point
+  (classical reuse), line-search trials counted as gradients. Consequence: a learner that moves away from the
+  accepted point pays outer + line-search gradients (>= 2 per iteration) -> it must halve the iterations to win.
+  Runs: run_dense_v2.py --only_wolfe_check (teacher alone, must reproduce opt_lbfgs); cell 1 K 20 / 50 / 100
+  (dense_meta_job.sh c1 | c1k50 | c1k100, METHOD=lbfgs_wolfe LR=1 GROUP=m5dwW_f1, list dense_meta_c1W.txt), 3 seeds.
+- 2026-11-17: User: no need for K 100 -> c1k100 dropped (seed 1 killed; seed 0 record kept in tmp/results/m5dwW_f1,
+  not reported). Remaining c1 / c1k50 seed 2 relaunched via src/scripts/dense_meta_c1W_rest.txt. Wolfe check (teacher
+  alone, to its stopping rule): median 40 / 43 gradient evaluations on test / test_ood.
+- 2026-11-18: User: runs too long -> stopped (c1k50 s1, c1 s2, c1k50 s2 killed during training; no records). Final:
+  K 20 seeds 0-1, K 50 seed 0. Findings subsection "Learned optimizer with the reference L-BFGS as teacher" written
+  (paper style): 11-12 iterations as the reference, 22.5-24 vs 14 gradients, cost 89-92 vs 53 fwd-eq, learned stretch x1.3,
+  K 50 = K 20. Training 7-10 h per seed (per-case strong-Wolfe fallback in a Python loop).

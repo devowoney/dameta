@@ -40,3 +40,42 @@ def test_lbfgs_descent_and_frozen_cases():
         assert ((g * f).sum(1)[active.bool()] > 0).all()                   # descent direction
         assert f[2].abs().max() == 0                                         # frozen case does not move
         c = c - f
+
+
+
+class _QuadCost:
+    """Minimal FourDVarCost-like quadratic: grad(c) -> (J, g) batched; per-case copies via the constructor."""
+    def __init__(self, a, x_star):
+        self.a, self.x_star = a, x_star
+
+    def grad(self, c):
+        r = c - self.x_star
+        g = torch.einsum("nij,nj->ni", self.a, r)
+        return 0.5 * (r * g).sum(1), g
+
+
+def test_lbfgs_wolfe_matches_torch_lbfgs():
+    """Teacher 'lbfgs_wolfe' (batched, first trial shared) reproduces torch.optim.LBFGS(strong_wolfe) iterates."""
+    a, x_star = _quadratic(n=3, d=6)
+    cost = _QuadCost(a, x_star)
+    t = ReferenceStep(torch.zeros_like(x_star), method="lbfgs_wolfe", lr=1.0, cost=cost)
+    t._case_cost = lambda i: _QuadCost(a[i:i + 1], x_star[i:i + 1])
+    c = torch.zeros_like(x_star)
+    ours = [c.clone()]
+    for _ in range(6):
+        j, g = cost.grad(c)
+        c = c - t(c, g, j=j)
+        ours.append(c.clone())
+    for i in range(3):
+        x = torch.zeros(6, dtype=torch.float64, requires_grad=True)
+        opt = torch.optim.LBFGS([x], lr=1.0, max_iter=1, history_size=10, tolerance_grad=1e-12,
+                                tolerance_change=1e-14, line_search_fn="strong_wolfe")
+        for k in range(6):
+            def closure():
+                opt.zero_grad()
+                r = x - x_star[i]
+                f = 0.5 * r @ a[i] @ r
+                f.backward()
+                return f
+            opt.step(closure)
+            assert torch.allclose(x.detach(), ours[k + 1][i], rtol=1e-6, atol=1e-8), (i, k)

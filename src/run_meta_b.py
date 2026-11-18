@@ -268,6 +268,8 @@ def run(cfg: DictConfig) -> xr.Dataset:
     for key in ("step_ratio", "cos_ghat_grad"):
         if key in res:
             out[key] = (("ic", "kstep"), res[key])
+    if "grad_cum" in res and cfg.method == "lbfgs_wolfe":   # cost incl. line-search gradients (strong Wolfe teacher)
+        out["grad_cum"] = (("ic", "k"), res["grad_cum"])
     if "n_fwd_evals" in res:
         out["n_fwd_evals"] = (("ic",), res["n_fwd_evals"])
     out.attrs["train_info"] = json.dumps({k: v for k, v in info.items()}, default=float)

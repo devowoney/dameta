@@ -63,25 +63,60 @@ class LBFGSDirection:
 
 
 class ReferenceStep:
-    def __init__(self, control_like: torch.Tensor, method: str = "gd", lr: float = 1e-3, **optim_kwargs):
+    """
+    Methods: "gd", "adagrad", "lbfgs" (fixed step lr * d) and "lbfgs_wolfe" (2026-11-17).
+
+    "lbfgs_wolfe" = the classical REFERENCE L-BFGS step, i.e. one iteration of torch.optim.LBFGS with
+    line_search_fn="strong_wolfe" and the settings of run_dense_v2.opt_lbfgs (history 10, lr 1, tolerance_change 1e-14,
+    c1 1e-4, c2 0.9, max_ls 25): direction d = -H g (two-loop over the pairs of the moves actually applied), first
+    iteration d = -g with initial t = min(1, 1 / |g|_1) * lr, then t = lr, accepted t from torch's own _strong_wolfe.
+    Batched: the first trial t is evaluated for all cases in one batched gradient; cases that already satisfy the
+    strong Wolfe conditions there (torch's first-trial exit) are accepted, the others call torch's _strong_wolfe
+    per case (its evaluations are counted, the shared first trial once). Needs cost (FourDVarCost) and __call__(...,
+    j=J(c)). Cost bookkeeping:
+        n_ls [n]      cumulative line-search gradient evaluations (each trial = forward + adjoint)
+        is_free(c)    cases whose control equals the last accepted point: their J and gradient are already known
+                      from the line search (the classical method reuses them), so the outer gradient is not counted.
+    """
+
+    def __init__(self, control_like: torch.Tensor, method: str = "gd", lr: float = 1e-3, cost=None,
+                 **optim_kwargs):
         self.method, self.lr = method.lower(), float(lr)
         self.optimizer, self._shadow, self._lbfgs = None, None, None
-        if self.method == "adagrad":
+        self.cost, self._case_costs, self._acc, self._first = cost, {}, None, True
+        self.n_ls = torch.zeros(control_like.shape[0], dtype=torch.long)
+        if self.method == "lbfgs_wolfe":
+            if cost is None:
+                raise ValueError("method 'lbfgs_wolfe' needs cost")
+            self._lbfgs = LBFGSDirection(**optim_kwargs)
+        elif self.method == "adagrad":
             self._shadow = control_like.detach().clone().requires_grad_(True)  # private leaf tensor (holds state)
             self.optimizer = torch.optim.Adagrad([self._shadow], lr=self.lr, **optim_kwargs)
         elif self.method == "lbfgs":
             self._lbfgs = LBFGSDirection(**optim_kwargs)
         elif self.method != "gd":
-            raise ValueError(f"unknown reference method {method!r} (expected 'gd', 'adagrad' or 'lbfgs')")
+            raise ValueError(f"unknown reference method {method!r} (expected gd, adagrad, lbfgs or lbfgs_wolfe)")
 
     def describe(self) -> str:
+        if self.method == "lbfgs_wolfe":
+            return "L-BFGS(strong Wolfe line search)"
         name = "L-BFGS(fixed step)" if self._lbfgs else ("GD" if self.optimizer is None else "Adagrad")
         return f"{name}(lr={self.lr:g})"
 
+    def is_free(self, c: torch.Tensor) -> torch.Tensor:
+        """[n] bool: c equals the last accepted line-search point (gradient already evaluated there)."""
+        if self._acc is None:
+            return torch.zeros(c.shape[0], dtype=torch.bool)
+        tol = 1e-12 * (1.0 + self._acc.abs().amax(1))
+        return (c - self._acc).abs().amax(1) <= tol
+
     @torch.no_grad()
-    def __call__(self, control: torch.Tensor, grad: torch.Tensor, active: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def __call__(self, control: torch.Tensor, grad: torch.Tensor, active: Optional[torch.Tensor] = None,
+                 j: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Return f(c^k) [n, d] for control c^k and gradient g^k; zero rows where active is False."""
-        if self._lbfgs is not None:
+        if self.method == "lbfgs_wolfe":
+            step = self._wolfe(control.detach(), grad.detach(), j, active)
+        elif self._lbfgs is not None:
             step = self.lr * self._lbfgs(control.detach(), grad.detach())
         elif self.optimizer is None:
             step = self.lr * grad
@@ -95,3 +130,47 @@ class ReferenceStep:
         if active is not None:
             step = step * active[:, None]
         return step.detach()
+
+    def _case_cost(self, i: int):
+        if i not in self._case_costs:
+            cs = self.cost
+            self._case_costs[i] = type(cs)(cs.step, cs.y[i:i + 1], cs.mask, cs.x0_b[i:i + 1], cs.cfg, weak=cs.weak,
+                                           b_inv=None if cs.b_inv is None else cs.b_inv[i:i + 1])
+        return self._case_costs[i]
+
+    def _wolfe(self, c, g, j, active):
+        from torch.optim.lbfgs import _strong_wolfe
+        if j is None:
+            raise ValueError("method 'lbfgs_wolfe' needs the current cost j")
+        hg = self._lbfgs(c, g)                                   # H g (LBFGSDirection keeps the applied-move pairs)
+        if self._first:                                          # torch: d = -g, t = min(1, 1 / |g|_1) * lr
+            hg = g.clone()
+            t0 = torch.clamp(1.0 / g.abs().sum(1), max=1.0) * self.lr
+        else:
+            t0 = torch.full_like(j, self.lr)
+        self._first = False
+        d = -hg
+        gtd = (g * d).sum(1)
+        pend = torch.isfinite(j) & torch.isfinite(d).all(1) & (gtd < -1e-14)
+        if active is not None:
+            pend = pend & active.bool()
+        t0 = torch.where(pend, t0, torch.zeros_like(t0))
+        x_acc = c + t0[:, None] * d
+        with torch.enable_grad():
+            j_t, g_t = self.cost.grad(x_acc)                     # shared first trial, batched
+        self.n_ls += pend.long()
+        ok = pend & torch.isfinite(j_t) & (j_t <= j + 1e-4 * t0 * gtd) & ((g_t * d).sum(1).abs() <= -0.9 * gtd)
+        for i in torch.nonzero(pend & ~ok).flatten().tolist():
+            ci = self._case_cost(i)
+
+            def obj(x, t, dd, ci=ci):
+                with torch.enable_grad():
+                    jj, gg = ci.grad((x + t * dd)[None])
+                return float(jj[0]), gg[0]
+
+            _, _, t, nev = _strong_wolfe(obj, c[i], float(t0[i]), d[i], float(j[i]), g[i], gtd[i],
+                                         tolerance_change=1e-14, max_ls=25)
+            self.n_ls[i] += int(nev) - 1                         # first trial already counted
+            x_acc[i] = c[i] + float(t) * d[i]
+        self._acc = x_acc.clone()
+        return c - x_acc

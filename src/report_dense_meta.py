@@ -43,6 +43,10 @@ CELLS = {"c1": ("delta", "cell 1: learned optimizer, Adagrad teacher (1 gradient
                 "adagrad_lr0.03", "c1"),
          "c1L": ("delta", "cell 1: learned optimizer, L-BFGS teacher (1 gradient / it)", "grad", "m5dwL_f1",
                  "lbfgs_lr0.0333333", "c1"),
+         "c1W": ("delta", "cell 1: learned optimizer, strong-Wolfe L-BFGS teacher, K 20", "grad", "m5dwW_f1",
+                 "lbfgs_wolfe_lr1", "c1"),
+         "c1W50": ("delta", "cell 1: learned optimizer, strong-Wolfe L-BFGS teacher, K 50", "grad", "m5dwW_f1",
+                   "lbfgs_wolfe_lr1", "c1k50"),
          "c5": ("unroll", "cell 5: learned optimization, K 20 unroll (1 gradient / step)", "grad", "m5dw_f1",
                 "adagrad_lr0.03", "c5"),
          "c5k50": ("unroll", "cell 5: learned optimization, K 50 unroll", "grad", "m5dw_f1", "adagrad_lr0.03",
@@ -55,6 +59,21 @@ F = 500
 def iters_to(j, jstar):
     hit = j <= 1.01 * jstar[:, None]
     return np.where(hit.any(1), hit.argmax(1), np.nan)
+
+
+def cost_to(j, jstar, unit, gcum=None):
+    """Forward-run equivalents to the target: iterations x unit, or with a strong-Wolfe teacher the cumulative
+    gradient evaluations (outer + line search, gradients reused from the line search not counted) x unit."""
+    k = iters_to(j, jstar)
+    if gcum is None:
+        return k * unit
+    ki = np.nan_to_num(k).astype(int)
+    return np.where(np.isfinite(k), gcum[np.arange(len(k)), ki] * unit, np.nan)
+
+
+def cum_cost_axis(n_k, unit, gcum=None):
+    """Median cumulative cost per iterate (x axis of the convergence curves)."""
+    return np.arange(n_k) * unit if gcum is None else np.median(gcum, 0) * unit
 
 
 def main():
@@ -73,8 +92,8 @@ def main():
         jstar = np.nanmin(np.where(np.isfinite(jfin), jfin, np.nan), 0)
         rows, curves = [], {}
 
-        def summary(j, ic, fc_est, fc_true, unit):
-            k = iters_to(j, jstar) * unit
+        def summary(j, ic, fc_est, fc_true, unit, ls=None):
+            k = cost_to(j, jstar, unit, ls)
             return {"cost": float(np.nanmedian(k)), "reached": float(np.isfinite(k).mean()),
                     "worse": int((j[:, -1] > 1.1 * jstar).sum()), "ic": float(np.nanmedian(ic)),
                     "fc_est": float(np.nanmedian(fc_est)), "fc_true": float(np.nanmedian(fc_true))}
@@ -82,14 +101,15 @@ def main():
         ref = {}
         for o, d in cl.items():
             lab = CLASSICAL[o]
+            ls = d.grad_cum.values if "grad_cum" in d else None
             x0, eta = RD.split_control(RD.control(d), ds, True)
             fc = RD.forecasts(x0, eta, "f1", ds)
             truth_fc = xt[:, L:L + F + 1]
             s = summary(d.J_hist.values, RD.rmse(x0.numpy(), xt[:, 0]), RD.rmse(fc["f1"], truth_fc)[:, 100],
-                        RD.rmse(fc["truth"], truth_fc)[:, 100], r)
+                        RD.rmse(fc["truth"], truth_fc)[:, 100], r, ls)
             ref[o] = s
             rows.append({"method": lab, "seeds": 1, **s})
-            curves[o] = (np.arange(d.sizes["k"]) * r, np.nanmedian(d.J_hist.values / jstar[:, None] - 1, 0))
+            curves[o] = (cum_cost_axis(d.sizes["k"], r, ls), np.nanmedian(d.J_hist.values / jstar[:, None] - 1, 0))
         for c, (var, lab, unit, grp, teach, ctag) in CELLS.items():
             per = []
             for s_ in range(3):
@@ -99,10 +119,11 @@ def main():
                 d = xr.load_dataset(p)
                 u = r if unit == "grad" else 1.0
                 j = d.J_iter.values
+                ls = d.grad_cum.values if "grad_cum" in d else None
                 per.append(summary(j, d.rmse_x0.values, d.rmse_fc.sel(lead=100).values,
-                                   d.rmse_fc_m1.sel(lead=100).values, u))
+                                   d.rmse_fc_m1.sel(lead=100).values, u, ls))
                 if s_ == 0:
-                    curves[c] = (np.arange(j.shape[1]) * u, np.nanmedian(j / jstar[:, None] - 1, 0))
+                    curves[c] = (cum_cost_axis(j.shape[1], u, ls), np.nanmedian(j / jstar[:, None] - 1, 0))
             if not per:
                 continue
             m = {k: float(np.mean([p_[k] for p_ in per])) for k in per[0]}
@@ -131,7 +152,7 @@ def main():
         sty = {"adagrad": ("tab:blue", "-"), "gd": ("tab:gray", "-"), "lbfgs": ("tab:green", "-"),
                "c1": ("tab:orange", "--"), "c1L": ("tab:brown", "--"),
                "lbfgsfix": ("tab:olive", "-"), "c5": ("tab:purple", "--"), "c5k50": ("tab:pink", "--"),
-               "c8a": ("tab:red", "--")}
+               "c8a": ("tab:red", "--"), "c1W": ("tab:cyan", "--"), "c1W50": ("tab:blue", ":")}
         for k_, (x, y) in curves.items():
             lab = CLASSICAL.get(k_, CELLS.get(k_, ("", k_))[1])
             ax.semilogy(x, np.maximum(y, 1e-8), color=sty[k_][0], ls=sty[k_][1], label=lab)

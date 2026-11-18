@@ -43,6 +43,7 @@ import numpy as np
 import torch
 
 from ..da.cost import FourDVarCost
+from ..da.fourdvar import _pad_cum
 from ..da.reference_step import ReferenceStep
 from .networks import StretchNet
 
@@ -204,7 +205,10 @@ def run_meta_b(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaB, method
     if cost.weak and eta_init is None:
         eta_init = torch.zeros(n, cost.cfg.n_obs - 1, 3, dtype=x0_init.dtype)
     c = cost.pack(x0_init, eta_init).detach().clone()
-    teacher = ReferenceStep(c, method=method, lr=lr)
+    teacher = ReferenceStep(c, method=method, lr=lr, cost=cost if method == "lbfgs_wolfe" else None)
+    # grad_cum[k]: gradient evaluations to reach iterate k (outer gradients not already known from the teacher's
+    # line search + line-search trials); = k for teachers without a line search
+    outer, grad_hist = torch.zeros(n, dtype=torch.long), [torch.zeros(n, dtype=torch.long)]
     learner.reset()
     if not train:
         learner.net.eval()
@@ -217,6 +221,7 @@ def run_meta_b(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaB, method
     for k in range(max_iter):
         j, g = cost.grad(c)
         n_evals += active.long()
+        outer += (active.bool() & ~teacher.is_free(c)).long()
         j_hist.append(j.clone() if j_prev is None else torch.where(active.bool(), j, j_hist[-1]))
         if j_prev is not None:
             rel = (j_prev - j).abs() / j_prev.abs().clamp_min(1e-300)
@@ -224,7 +229,9 @@ def run_meta_b(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaB, method
             active = active * (~newly_done).to(c.dtype)
         if active.sum() == 0:
             break
-        f = teacher(c, g, active)
+        with torch.no_grad():
+            f = teacher(c, g, active, j=j)
+        grad_hist.append(outer + teacher.n_ls)
         if train:
             meta_diag.append(learner.meta_update(c, g, f, k))
         c_new = learner.advance(c, g, f, k, record=train)
@@ -256,6 +263,7 @@ def run_meta_b(cost: FourDVarCost, x0_init: torch.Tensor, learner: MetaB, method
         "step_ratio": _pad(ratio_hist), "n_grad_evals": n_evals.numpy(),
         "converged": ((active == 0) & (n_evals < max_iter) & torch.isfinite(j_final)).numpy(),
         "x0_a": c[:, :3].numpy(), "wall_s": wall, "meta_diag": meta_diag,
+        "grad_cum": _pad_cum(grad_hist, max_iter),
     }
     if cost.weak:
         out["eta_final"] = cost.unpack(c)[1].numpy()

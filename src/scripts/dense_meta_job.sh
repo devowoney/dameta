@@ -12,13 +12,20 @@ case $C in
   c1)    X="variant=delta delta.episode_iters=100 delta.w_perf_delta=2.5 delta.grad_align_steps=2 \
 delta.grad_trans_steps=2 delta.meta_lr=1e-2 net.output_scale=10 delta.n_epochs=3 delta.select_epoch=true \
 delta.train_seed=$S";;
+  c1k50)    X="variant=delta delta.episode_iters=100 delta.w_perf_delta=2.5 delta.grad_align_steps=2 \
+delta.grad_trans_steps=2 delta.meta_lr=1e-2 net.output_scale=10 delta.n_epochs=3 delta.select_epoch=true \
+delta.train_seed=$S delta.K=50";;
+  c1k100)    X="variant=delta delta.episode_iters=100 delta.w_perf_delta=2.5 delta.grad_align_steps=2 \
+delta.grad_trans_steps=2 delta.meta_lr=1e-2 net.output_scale=10 delta.n_epochs=3 delta.select_epoch=true \
+delta.train_seed=$S delta.K=100";;
   c5)    X="variant=unroll unroll.loss=sum unroll.K=20 unroll.seed=$S";;
   c5k50) X="variant=unroll unroll.loss=sum unroll.K=50 unroll.seed=$S";;
   c8a)   X="variant=learned_grad learned_grad.arch=adjoint learned_grad.data=sampled learned_grad.loss=jacobian \
 learned_grad.traj_stride=0 learned_grad.samples_per_case=8 learned_grad.seed=$S";;
   *) echo "unknown cell $C"; exit 1;;
 esac
-# teacher: METHOD / LR env overrides (default Adagrad 0.03; L-BFGS teacher: METHOD=lbfgs LR=<fixed-step val lr>)
+# teacher: METHOD / LR env overrides (default Adagrad 0.03; L-BFGS teacher: METHOD=lbfgs LR=<fixed-step val lr>;
+# reference strong-Wolfe L-BFGS teacher: METHOD=lbfgs_wolfe LR=1)
 METHOD=${METHOD:-adagrad}; LR=${LR:-0.03}; SQ=0.0316227766
 G=${GROUP:-m5dw_f1}; T=_${C}_s$S
 COMMON="dataset=v2 data_prefix=l63v2d model=f1 constraint=weak pattern=full cost.sigma_q=$SQ method=$METHOD lr=$LR \

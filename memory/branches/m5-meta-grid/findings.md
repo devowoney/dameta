@@ -338,3 +338,58 @@ out of distribution (test_ood reached 0.84, ×11.6 vs Adagrad), but 3–6 % of c
 and it stays ~2.4× costlier than L-BFGS with a line search. Cell 5 with K = 50 does not close its gap: final cost
 unchanged, 0.60 reached vs 0.53 on test, and test_ood worse (0.21 reached, 71 worse basins, IC 0.38 > first guess
 0.27). The learned unroll is fast but does not generalise.
+
+#### Learned optimizer with the reference L-BFGS as teacher (same problem; 2026-11-18)
+**Method.** The teacher of cell 1 is now the reference method itself: one iteration of L-BFGS with a strong-Wolfe
+line search, with the settings of the classical baseline (history 10, unit initial step, c₁ = 10⁻⁴, c₂ = 0.9, at most
+25 trials). At each outer iteration the teacher computes the L-BFGS direction from the curvature pairs of the moves
+actually applied, runs the line search from the current control, and returns its accepted step f; the learned network then
+rescales f component-wise exactly as before (K sub-steps, stretch in [0, 11]; Δ inner loss; training on the 1000 training
+cases, best epoch on validation, frozen inference on test and test_ood). With a zero stretch the learner is identical
+to the reference; a unit test checks that the teacher alone reproduces the iterates of torch.optim.LBFGS. Cost is
+counted in gradient evaluations (forward + adjoint; 1 gradient = 3.82 F1 forward runs): every line-search trial
+counts as one gradient, and the outer gradient is not counted when the control is the point just accepted by the line
+search, whose cost and gradient are already known (as in the classical method). Two inner chain lengths K were
+tested (20, the default, and 50). Runs were stopped after 2 seeds (K 20) and 1 seed (K 50), since the seeds agreed
+closely; one-off training took 7–10 h per seed (upper bound, concurrent runs).
+
+**Iterations versus gradient evaluations.** An *iteration* is one update of the control; its *cost* is the number of
+gradient evaluations it needs. For the reference, the line search usually accepts its first trial, whose gradient is
+then reused at the next iteration, so one iteration costs about one gradient (12 iterations, 14 gradients to the target).
+A learner that moves the control away from the accepted point must evaluate a new gradient there and, in addition, run
+the teacher's line search, so each iteration costs at least two gradients.
+
+**Table — dense observations, weak constraint, F1 (control dimension 333); medians over cases, learners averaged over
+seeds.** Target: J ≤ 1.01 J*.
+| method (seeds) | iterations to target | gradients to target | cost (F1 fwd-eq) | reached | worse basins /200 | IC RMSE | fc @1 TU (F1) | fc @1 TU (true) | learned stretch |
+|---|---|---|---|---|---|---|---|---|---|
+| *test* | | | | | | | | | |
+| L-BFGS, strong Wolfe (reference) | 12 | 14 | 53 | 1.00 | 0 | 0.332 | 0.73 | 2.31 | — |
+| cell 1, reference teacher, K 20 (2) | 11–11.5 | 22.5–24 | 89 ± 3 | 0.94 | 0 | 0.344 | 0.72 | 2.30 | ×1.29–1.33 |
+| cell 1, reference teacher, K 50 (1) | 11 | 23 | 88 | 0.93 | 2 | 0.343 | 0.75 | 2.30 | ×1.35 |
+| *test_ood* | | | | | | | | | |
+| L-BFGS, strong Wolfe (reference) | 12 | 14 | 53 | 0.99 | 0 | 0.260 | 1.03 | 2.01 | — |
+| cell 1, reference teacher, K 20 (2) | 11–12 | 24 | 92 ± 0 | 0.94 | 5 | 0.253 | 1.05 | 2.06 | ×1.29–1.32 |
+| cell 1, reference teacher, K 50 (1) | 12 | 24 | 92 | 0.94 | 5 | 0.240 | 1.05 | 2.02 | ×1.36 |
+For comparison (same problem, cost in F1 fwd-eq on test): cell 1 with the Adagrad teacher 178, with the fixed-step L-BFGS
+teacher 129, Adagrad 934.
+
+**Findings.**
+1. *A learned optimizer does not improve on its teacher when the teacher already chooses its step length well.* With
+   the reference L-BFGS as teacher, the learner needs as many iterations as the reference (11–12 vs 12) but 1.7× more
+   model runs (×0.58–0.60 speed-up on test and test_ood), and it reaches the target in fewer cases (0.93–0.94 vs
+   0.99–1.00). The analysis quality is unchanged (IC RMSE and forecasts within the seed spread of the reference).
+2. *What the learner learns is a step-length correction.* The network converges to a nearly uniform over-stretch of
+   the accepted step (median ×1.29–1.36 across runs; interquartile range within ×1.27–1.45) and does not change the search direction. The Δ inner loss
+   rewards the first-order decrease of the cost along the move, which favours longer steps; it does not see the
+   gradient evaluation that is lost by leaving the line-search point. Against teachers with a poorly tuned step
+   (Adagrad, fixed-step L-BFGS) the same correction gave a ×2.8–5 gain; against a line-search teacher there is no step-length
+   error left to correct.
+3. *A longer inner chain does not help.* K = 50 gives the same iterations, cost and reach as K = 20.
+4. *Consequence for amortisation.* Because this learner still requires the teacher's gradient and line search at
+   every iteration, its per-case inference cost is bounded below by that of the reference; no number of cases can
+   pay back its training. A cost reduction at inference would require a learner that replaces gradient evaluations
+   (fewer model runs per iteration), not one that rescales the step of a converged classical method.
+Sources: src/dameta/da/reference_step.py (method lbfgs_wolfe), src/scripts/dense_meta_job.sh (c1, c1k50; METHOD=lbfgs_wolfe),
+records tmp/results/m5dwW_f1/, teacher check tmp/results/dense/*_lbfgswolfecheck_*.nc, tables
+tmp/results/dense/meta_summary_{test,test_ood}.md.
