@@ -38,6 +38,9 @@ from dameta.meta.meta_greedy import GreedyConfig, GreedyOptimizer, build_greedy,
 from dameta.meta.learned_gradient import (LearnedGradient, LGConfig, build_lg,  # noqa: E402
                                           collect_pairs as collect_lg_pairs,
                                           collect_sampled_pairs as collect_lg_sampled, run_learned_gradient)
+from dameta.meta.meta_b_free import FreeDeltaConfig, train_free_delta  # noqa: E402
+from dameta.meta.meta_b_direct import (DirectConfig, DirectDelta, build_direct,  # noqa: E402
+                                       collect_delta_pairs, run_direct)
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 from run_4dvar import analysis_record, build_step  # noqa: E402  (also registers the project_root resolver)
 
@@ -96,7 +99,31 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
     ptr = problem(cfg, "train", cfg.train.n_train)
     make_tr, xb_tr = ptr.cost, ptr.x0_b
     t0 = time.perf_counter()
-    if cfg.variant == "delta":
+    if cfg.variant == "delta" and cfg.delta.output == "free":
+        # UNSUPERVISED delta (2026-11-18): module outputs Delta_hat (no teacher at inference); one meta step per
+        # iteration through the stored graph of the previous move (no replay); teacher only for align + denominator
+        dk = OmegaConf.to_container(cfg.delta)
+        fcfg = FreeDeltaConfig(**{k: dk[k] for k in FreeDeltaConfig.__dataclass_fields__})
+        ncfg = DirectConfig(hidden=cfg.net.hidden, n_layers=cfg.net.n_layers, emb_dim=cfg.net.emb_dim,
+                            log_k=cfg.net.log_k, K=int(dk["K"]), seed=fcfg.train_seed,
+                            obs_input=bool(dk.get("obs_input", False)), arch=str(dk.get("arch", "mlp")),
+                            kernel=int(dk.get("kernel", 5)))
+        learner = build_direct(d, ncfg, ctrl_mean, ctrl_std, n_obs=ptr.ccfg.n_obs)
+        cache = dk.get("pairs_cache")
+        pairs = collect_delta_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol),
+                                    cache=f"{cache}_train.pt" if cache else None)
+        learner.init_magnitude(pairs)                       # l0 = median teacher step size (gradient units)
+        if not fcfg.episode_iters:                          # 0 = teacher mean iterations on the train cases
+            fcfg.episode_iters = int(np.ceil(len(pairs["k"]) / len(xb_tr)))
+        va = problem(cfg, "val", cfg.delta.select_n_val) if fcfg.select_epoch else None
+        hist = train_free_delta(learner, lambda idx: make_tr(idx), xb_tr, cfg.method, float(cfg.lr), fcfg,
+                                cost_val=va.cost() if va else None, x0_val=va.x0_b if va else None,
+                                log=lambda h: log.info("episode %s", {
+                                    k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
+        info = {"train_history": hist, "episode_iters": fcfg.episode_iters,
+                "train_grad_evals": len(xb_tr) * fcfg.episode_iters * fcfg.n_epochs}
+    elif cfg.variant == "delta":
+        # original Meta-B (delta.output = stretch): teacher step stretched by S_theta, also at inference
         torch.manual_seed(cfg.delta.train_seed)
         net = StretchNet(d, **cfg.net)
         dk = OmegaConf.to_container(cfg.delta)
@@ -158,6 +185,24 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
         hist = fit_lookahead(learner, pairs, vpairs, lcfg, log=lambda h: log.info("epoch %s", {
             k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
         info = {"train_history": hist, "train_grad_evals": int(len(pairs["k"]))}
+    elif cfg.variant == "delta_exact":
+        # delta_exact = SUPERVISED delta (2026-11-18): Delta_hat imitates the teacher update Delta = x^{k+1} - x^k (no delayed
+        # estimation, no chain rule, no linear model of J, no align); inference without teacher, 1 gradient / iter
+        dk = OmegaConf.to_container(cfg.delta_exact)
+        dcfg = DirectConfig(**{k: dk[k] for k in DirectConfig.__dataclass_fields__})
+        va = problem(cfg, "val", cfg.train.n_val_pairs_ic)
+        cache = dk.get("pairs_cache")
+        pairs = collect_delta_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol),
+                                    cache=f"{cache}_train.pt" if cache else None)
+        vpairs = collect_delta_pairs(va.cost(), va.x0_b, cfg.method, float(cfg.lr), int(cfg.max_iter),
+                                     float(cfg.tol), cache=f"{cache}_val.pt" if cache else None)
+        learner = build_direct(d, dcfg, ctrl_mean, ctrl_std, n_obs=ptr.ccfg.n_obs)
+        # case context (coords cvt: Cholesky factor of B, background) + observation / innovation features
+        pairs, vpairs = learner.prepare_pairs(pairs, make_tr()), learner.prepare_pairs(vpairs, va.cost())
+        log.info("direct-delta teacher pairs: train %d, val %d", len(pairs["k"]), len(vpairs["k"]))
+        hist = learner.fit(pairs, vpairs, log=lambda h: log.info("epoch %s", {
+            k: round(v, 5) if isinstance(v, float) else v for k, v in h.items()}))
+        info = {"train_history": hist, "train_pairs": int(len(pairs["k"]))}
     elif cfg.variant == "greedy":
         # M5 cell 3: free update without gradient input, online greedy J(x^{k+1}) / J(x^k)
         gk = OmegaConf.to_container(cfg.greedy)
@@ -230,10 +275,12 @@ def run(cfg: DictConfig) -> xr.Dataset:
     ccfg, weak = ev.ccfg, cfg.constraint == "weak"
     d = 3 + (3 * (ccfg.n_obs - 1) if weak else 0)
 
+    free = cfg.variant == "delta_exact" or (cfg.variant == "delta" and cfg.delta.output == "free")
     if cfg.checkpoint:
         sd = torch.load(cfg.checkpoint, weights_only=False)
-        learner = {"delta": MetaB, "lookahead": MetaB, "supervised": MetaBSup, "greedy": GreedyOptimizer,
-                   "unroll": LearnedOptimization, "learned_grad": LearnedGradient}[cfg.variant].from_state_dict(sd)
+        learner = DirectDelta.from_state_dict(sd) if free else {"delta": MetaB, "lookahead": MetaB, "supervised": MetaBSup, "greedy": GreedyOptimizer,
+                   "unroll": LearnedOptimization, "learned_grad": LearnedGradient,
+                   "delta_exact": DirectDelta}[cfg.variant].from_state_dict(sd)
         info = {"loaded_from": str(cfg.checkpoint)}
     else:
         x_tr = problem(cfg, "train", cfg.train.n_train).x_true
@@ -244,7 +291,10 @@ def run(cfg: DictConfig) -> xr.Dataset:
 
     cost = ev.cost()
     xb = ev.x0_b
-    if cfg.variant in ("delta", "lookahead"):
+    if free:                                                     # delta_exact / delta (free): no teacher
+        res = run_direct(cost, xb, learner, int(cfg.max_iter), float(cfg.tol),
+                         safeguard=str(cfg.delta_exact.get("safeguard", "none")))   # inference option
+    elif cfg.variant in ("delta", "lookahead"):
         res = run_meta_b(cost, xb, learner, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
     elif cfg.variant == "greedy":
         res = run_greedy(cost, xb, learner, int(cfg.max_iter), float(cfg.tol))
@@ -268,7 +318,7 @@ def run(cfg: DictConfig) -> xr.Dataset:
     for key in ("step_ratio", "cos_ghat_grad"):
         if key in res:
             out[key] = (("ic", "kstep"), res[key])
-    if "grad_cum" in res and cfg.method == "lbfgs_wolfe":   # cost incl. line-search gradients (strong Wolfe teacher)
+    if "grad_cum" in res and (cfg.method == "lbfgs_wolfe" or free):   # cost incl. line-search gradients (strong Wolfe teacher)
         out["grad_cum"] = (("ic", "k"), res["grad_cum"])
     if "n_fwd_evals" in res:
         out["n_fwd_evals"] = (("ic",), res["n_fwd_evals"])

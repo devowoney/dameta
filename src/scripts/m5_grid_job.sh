@@ -8,7 +8,7 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 P=/Odyssey/private/j25lee/miniforge3/envs/oceanai/bin/python
 M=$1; C=$2; S=$3
 case $C in
-  c1)  X="variant=delta delta.episode_iters=100 delta.w_perf_delta=2.5 delta.grad_align_steps=2 \
+  c1)  X="variant=delta delta.output=stretch delta.episode_iters=100 delta.w_perf_delta=2.5 delta.grad_align_steps=2 \
 delta.grad_trans_steps=2 delta.meta_lr=1e-2 net.output_scale=10 delta.n_epochs=3 delta.select_epoch=true \
 delta.train_seed=$S";;
   c2)  X="variant=lookahead net.output_scale=10 lookahead.seed=$S";;

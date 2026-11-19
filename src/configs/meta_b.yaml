@@ -1,6 +1,7 @@
 # Meta-B run (E2-B = physical L63, E4-B = emulator): meta-train on train ICs, then FROZEN inference on `split`.
 # All hyper-parameters are adjustable from the command line (pilot 2026-11-11); select them on val only.
 variant: delta                # delta (1) | lookahead (2) | greedy (3) | supervised (4) | unroll (5 / 7: unroll.use_grad)
+                              # | delta_exact (supervised delta: imitate the teacher update x^{k+1} - x^k)
 seed: 42                      # dataset master seed
 split: val                    # evaluation split: val (tuning) | test | test_ood   (never tune on test*)
 pattern: full
@@ -28,7 +29,17 @@ net:                          # delta variant: S_theta
   zero_init: true
   log_k: true
 
-delta:                        # bice delta-mode defaults
+delta:                        # UNSUPERVISED delta. output free (default, 2026-11-18): module outputs Delta_hat, no teacher
+                              # at inference, one meta step / iteration through the stored previous move (meta_b_free.py;
+                              # net = `net` block hidden / n_layers / emb_dim / log_k; uses K, w_align, w_perf_delta,
+                              # lambda_reg, meta_lr, grad_clip_norm, n_epochs, batch, episode_iters (0 = teacher mean
+                              # iterations), train_seed, select_*). output stretch = original Meta-B (bice delta-mode defaults)
+  output: free                # free | stretch
+  obs_input: false            # free: append the case observations (values y, mask, times t/L) to the input
+  arch: mlp                   # free: mlp (flat) | temporal (one token per obs time + 1D conv; needs obs_input)
+  kernel: 5                   # free, temporal: Conv1d kernel along time
+  select_stat: q90            # free: best-epoch val statistic of J(x^select_k): q90 (diverged = inf) | median
+  pairs_cache: null           # free: teacher-run cache prefix (step-magnitude init l0, horizon when episode_iters 0)
   K: 20
   num_meta_steps: 10
   grad_align_steps: 6
@@ -65,6 +76,40 @@ lookahead:                    # M5 cell 2: Meta-B chain (net + delta.K) trained 
   epochs: 30
   batch_size: 1024
   seed: 0
+
+delta_exact:                  # SUPERVISED delta (2026-11-18): Delta_hat = -RMS(g) * u_theta(x, g_std, k), target = teacher update Delta
+                              # u = exp(log-magnitude head) * normalised direction head, per block x0 | eta
+  K: 1                        # inner rollout sub-steps of Delta_hat (1 = one direct prediction)
+  hidden: 64
+  n_layers: 2
+  emb_dim: 8
+  log_k: true
+  obs_input: false            # append the case observations (values y, mask, times t/L) to the input
+  arch: mlp                   # mlp (flat) | temporal (one token per obs time + 1D conv; needs obs_input)
+  kernel: 5                   # temporal: Conv1d kernel along time
+  coords: raw                 # raw (x climatology-standardised) | cvt (v0 = L^-1 (x0 - x0_b), B = L L^T; w = eta / sigma_q)
+  grad_input: unit            # unit (g / RMS per case: magnitude dropped) | fixed (g / train-median RMS per block)
+  obs_feat: y                 # y (case observations) | innov (innovations at the current iterate, from the same forward run)
+  optimizer: adam             # adam (mini-batch, batch_size) | lbfgs (full batch, strong Wolfe, lbfgs_iters per epoch)
+  lbfgs_iters: 20
+  lbfgs_history: 50
+  max_train_pairs: 0          # > 0: random subset of the train pairs
+  hist_m: 0                   # > 0: history input = m most recent (s, y) pairs (L-BFGS memory), HistTemporalNet, no obs
+  base: grad                  # history: base direction of the output law: grad (-g) | lbfgs (two-loop -H g, same memory)
+  horizon: 1                  # target = teacher displacement over h steps x^{k+h} - x^k (delayed; capped at the end)
+  safeguard: none             # INFERENCE: none | backtrack (reject + halve a move whose J did not decrease; no extra run)
+  train_mode: offline         # offline (shuffled pairs) | online (teacher-run order, 1 Adam step / iteration, delayed target)
+  online_cases: 100           # online: cases per episode
+  train_loss: mean            # mean relative error | logmean: mean log(1 + rel)
+  select: median              # best-epoch val statistic: median | logmean | mean
+  first_step: learner         # learner | teacher (iteration 0 = one strong-Wolfe L-BFGS iteration, gradients counted)
+  max_log_dev: 10.0           # |log-magnitude head| bound around the train-median teacher step
+  lr: 1.0e-3
+  epochs: 50
+  batch_size: 1024
+  grad_clip_norm: 1.0
+  seed: 0
+  pairs_cache: null           # path prefix -> <prefix>_{train,val}.pt (teacher pairs reused across seeds)
 
 greedy:                       # M5 cell 3: free update without gradient, online greedy J(x^{k+1}) / J(x^k)
   obs_input: false

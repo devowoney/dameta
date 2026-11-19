@@ -177,3 +177,217 @@
   K 20 seeds 0-1, K 50 seed 0. Findings subsection "Learned optimizer with the reference L-BFGS as teacher" written
   (paper style): 11-12 iterations as the reference, 22.5-24 vs 14 gradients, cost 89-92 vs 53 fwd-eq, learned stretch x1.3,
   K 50 = K 20. Training 7-10 h per seed (per-case strong-Wolfe fallback in a Python loop).
+- 2026-11-18: Pilot: simplified delta learner ("direct", cell c1D): no delayed estimation, no chain rule, no linear
+  model of J, no ALIGN; target = teacher delta x^{k+1} - x^k; same input (x, g_std, emb(k)); inference without teacher
+  (1 gradient / iteration, no line search). src/dameta/meta/meta_b_direct.py (DirectNet: direction head + per-block
+  log-magnitude head, Delta = -RMS_block(g) * u; teacher pairs collected once per teacher run, cached for seeds;
+  best epoch on val-pair relative error), run_meta_b.py variant=direct, configs/meta_b.yaml block `direct`,
+  dense_meta_job.sh cell c1D. tests/test_direct_delta.py 6/6 (GD teacher reproduced: val rel. err 1.6e-10).
+  First head (plain u) failed: teacher step in gradient units spans ~4 decades (|u| 4e-5 at k 0 -> 1e-2 at k 40).
+  Smoke dense weak F1, strong-Wolfe L-BFGS teacher, 50 train / 20 val cases: train rel. err ~0.9 (= no move 1.0),
+  predicted step collapses to ~0 x teacher after k 3 (cos(pred, teacher) 0.92 at k < 3, 0.2 at k > 30); the
+  L-BFGS direction is history-determined (cos(teacher step, -g) 0.14-0.2) and not a function of (x, g, k) ->
+  regression to the mean. grad_norm_input flag does not change it. Adagrad-teacher smoke running.
+- 2026-11-18: Direct-delta: best epoch now on MEDIAN val-pair relative error (mean dominated by a few pairs, kept an
+  undertrained epoch). Smoke (dense weak F1, 50 train / 20 val cases; classical on the same 20 val: Adagrad 0.03 J 177.4
+  at 1000 gradients, 7/20 converged; strong-Wolfe L-BFGS J 170.9 at 40 gradients, IC 0.282):
+  Adagrad teacher: train rel. err 0.013, val median 0.67 (overfit at 50 cases), cos(pred, teacher) 0.83 val; frozen
+  run J 173.4 at 1000 gradients (below its teacher 177.4), IC 0.368, 0 diverged.
+  L-BFGS (strong Wolfe) teacher: val median 1.0, J 190.3 at 150 gradients, IC 0.662 (worse than first guess 0.413):
+  not imitable from (x, g, k). Pairs size: 350 MB per 50 Adagrad train cases (needs pair subsampling for 1000).
+- 2026-11-18: Pilot: dev testbed = ONE seed, 10 train cases, 20 val cases (src/scripts/dev_delta.sh, dense weak F1,
+  result group dev_delta). Delta module = two versions: (1) supervised "direct" (meta_b_direct.py, unchanged);
+  (2) unsupervised corrected delta = variant delta_exact (src/dameta/meta/meta_b_exact.py): teacher in the loop,
+  x^{k+1} = x^k - f_teacher * max(1 + s_theta(x^k, g^k, k), 0) (StretchNet, ONE stretch, no K chain), theta updated
+  at k+1 by the exact chain rule grad J(x^{k+1}) . (-d delta / d theta) (gradient the next iteration needs anyway),
+  one Adam step per iteration, no ALIGN / delayed replay; zero-init -> first move = teacher step; horizon = teacher
+  mean iterations; best epoch on val median J(x^K)/J(x^0) (epoch -1 = teacher alone). Inference run_meta_b, MetaB(K=1).
+  A teacher-free unsupervised mode written in between was removed (pilot: the teacher stays in the loop).
+  tests/test_direct_delta.py 11/11 (s = 0 == classical Adagrad exactly; chain-rule theta-gradient == FD 6e-8 / 2e-8).
+  Dev: direct + L-BFGS (Wolfe) teacher on 10 cases fails again (J 3155, IC 1.33). delta_exact dev runs launched.
+- 2026-11-18: Why direct (supervised) fails with the L-BFGS teacher (offline fits, 20 val cases; tmp/logs/imitation_diag.log):
+  default net 10 cases train median rel 0.105 / val 0.978 (memorises, no generalisation); 50 cases 0.494 / 0.971
+  (5x data: no val gain); big 512x3 nets did not train (lr 1e-3; inconclusive). Teacher step vs -g cos 0.20.
+  Scaling test 10/50/200/1000 cases + history input (s^{k-1}, y^{k-1}) launched (tmp/logs/imitation_scaling.log,
+  teacher pairs cached tmp/meta/dev_delta/imit_pairs_wolfe.pt).
+  delta_exact + Wolfe teacher (10 cases, 50 epochs, K 50): best epoch = -1 (teacher alone; 170.90, 40.5 gradients);
+  learned stretch ~0.95; score J(x^K)/J(x^0) was blind to speed (teacher converges < K) -> new delta_exact.score
+  "mean" (mean_m J(x^m)/J(x^0)), default.
+- 2026-11-18: Timing (local 4-core node, load ~13): dense-weak gradient 218 ms batched (10 cases) vs 276 ms single
+  case -> per-op overhead (~2200 tiny torch ops + autograd backward), not arithmetic. Wolfe teacher, 50 its x 10
+  cases: 70 s, of which 57 s per-case line search (585 single-case gradients); Adagrad 12 s. Pilot: use the HPC.
+  New src/scripts/sb_parallel.sh (sbatch, node sl-mee-br-205, command list in parallel, 1 thread each);
+  src/diag_imitation.py (collect / fit modes) replaces the local scaling script; jobs 78133 (collect 1000 train in
+  20 chunks + 20 val) -> 78134 (7 fits: n 10/50/200/1000, history input). Lists in src/scripts/lists/.
+- 2026-11-18: Pilot correction: `delta_exact` = SUPERVISED (loss Delta - Delta_hat, teacher update vs prediction; my
+  former `direct`, renamed: variant delta_exact, config block delta_exact); `delta` = UNSUPERVISED; at inference
+  NEITHER uses the teacher. Teacher-stretch "delta_exact" (meta_b_exact.py) removed. Write the update as Delta.
+  New unsupervised delta (delta.output=free, default; src/dameta/meta/meta_b_free.py): module outputs Delta_hat
+  (DirectNet, K-sub-step inner rollout), one meta step per iteration: w_perf <g^k, Delta_hat^{k-1}(theta)> / <g^{k-1},
+  f^{k-1}> through the STORED graph of the move (no replay) + w_align rel|Delta_hat(x^k) - Delta^k|^2 + reg; teacher
+  only in training. Original Meta-B kept as delta.output=stretch and pinned in the cell-1 scripts. Tests
+  test_direct_delta 14/14 (stored-graph gradient == FD, K 5, 9e-9 / 2e-8), test_m4 19/19.
+  Imitation scaling on HPC (jobs 78133 collect 3 min, 78134 fits 6.5 min; val = 20 cases, Wolfe teacher):
+  no history: val median rel 0.978 / 0.971 / 0.964 / 0.950 for 10 / 50 / 200 / 1000 cases (cos 0.49 -> 0.56);
+  + history (s^{k-1}, y^{k-1}): 50 cases 0.966; 1000 cases 0.855 (cos 0.77), lr 3e-4 0.872 (cos 0.82); still
+  improving at the last epoch. -> data alone helps little; the L-BFGS memory is the main missing information.
+  Dev runs (job 78179): delta_exact and delta (free) x {Wolfe, Adagrad} on 10 train / 20 val cases.
+- 2026-11-18: Pilot: never use the login node; HPC only (sbatch, tracked by a background squeue wait). Dev job 78179
+  was broken by my wrapper: xargs stripped the quotes, so each run got only its FIRST override (delta runs: no
+  select_epoch, episode_iters 100), delta_exact crashed (KeyError K: block lacked K). Results of that job are
+  invalid (delta free Wolfe J 230.9 / IC 1.32, Adagrad J 267.1 / IC 0.74 with wrong settings). Fixed: sb_parallel.sh
+  xargs -d '\n'; dev_delta.sh per-run hydra.run.dir (same-second runs shared one dir); delta_exact.K: 1.
+  Resubmitted as job 78193 (+ test_direct_delta on the HPC).
+- 2026-11-18: Job 78193 (valid settings, 10 train / 20 val; tests passed on HPC). delta_exact: Wolfe J 3155 / IC 1.33
+  (no imitation), Adagrad J 190.8 / IC 0.466 / 1000 gradients. delta (free): Wolfe 7/20 diverged, Adagrad 12/20
+  diverged; diverged cases blow up at ITERATION 1 (first predicted step too large: step proportional to |g| while the
+  L-BFGS first step is normalised by |g|_1; the net never sees |g|); val score (median J at k 10) hid the minority.
+  Fixes: delta.grad_norm_input (log RMS_block g input), delta.select_stat q90 (diverged = inf, default).
+  Job 78206: + grad-norm input for delta_exact / delta x {Wolfe, Adagrad}, delta Wolfe q90-only control.
+- 2026-11-18: Job 78206 (10 train / 20 val; tests passed). grad-norm input: delta_exact Wolfe J 3155 -> 199.2 (IC
+  0.541), Adagrad unchanged 190.8 (IC 0.465); delta (free) Wolfe 1/20 diverged, J 197.3, IC 0.456; Adagrad 0/20
+  diverged, J 190.6, IC 0.526 (best epoch 0); q90-only control (Wolfe, no grad norm): 0/20 diverged but J 244.9,
+  IC 1.08. No configuration beats its teacher (Wolfe 170.9 / IC 0.282 / 40 gradients; Adagrad 177.4 / 0.424 /
+  1000) and every one ends worse than the first guess (IC 0.413). Awaiting pilot decision on the next step.
+- 2026-11-18: Pilot: grad-norm input NOT accepted (removed from code and config). Hypothesis (pilot): the delta module
+  learns an optimisation curve better than across different problems; cell 1 worked on the long dense-obs weak
+  problem (111 obs, control 333). -> observation input (obs_input flag, delta_exact and delta): per-case features
+  [y standardised by train-truth climatology and masked (3 n_obs), mask (3 n_obs), times t_i/L (n_obs)] appended to
+  [x_std, g_std, emb(k)] (src/dameta/meta/da_utils_obs.py). Teacher pairs now carry the case index (own collector;
+  old caches without it are re-collected). test_direct_delta + test_obs_input. Job 78258: delta_exact / delta x
+  {Wolfe, Adagrad} with obs + delta Adagrad q90 control without obs (tests run in the same job).
+- 2026-11-18: Job 78258 (obs input; 10 train / 20 val; classical on these cases: Wolfe 170.9 / IC 0.282 / 40 grads,
+  Adagrad 177.4 / 0.424 / 1000; first guess IC 0.413). delta_exact + obs: Wolfe J 3155 -> 190.4 (IC 0.648; train rel
+  0.44 vs val 0.997), Adagrad J 190.8 -> 179.6 (IC 0.466 -> 0.443; train rel 0.004 vs val 0.86: heavy overfit with
+  777 obs inputs on 10 cases) = closest to its teacher so far. delta (free) + obs: Wolfe J 659 / IC 4.24, Adagrad
+  J 473 / IC 0.73 (worse). delta Adagrad control without obs (q90): best epoch -1 (= untrained net), J 190.8,
+  IC 0.390; every trained epoch was worse (q90 J at k 10 -> divergent). The test script had a syntax error (my
+  escaped backslash) -> fixed, rerun alone as job 78276.
+- 2026-11-18: Tests 18/18 on HPC (job 78276). Pilot: flat obs input (777 values) too large -> arrange in time.
+  New src/dameta/meta/temporal_net.py (arch temporal, needs obs_input; pilot chose 1D conv): one token per obs time
+  [ctrl_i (x0 / eta_i), g_std_i, y_i, mask_i, t_i/L, emb(k)], shared Linear embedding + n_layers residual Conv1d
+  (kernel 5) along time, per-token direction head, per-block log step size from token 0 (x0) / mean of tokens >= 1
+  (eta); same output law and interface as DirectNet. test_temporal_net (time locality checked). Job 78301: delta_exact
+  / delta x {Wolfe, Adagrad}, temporal, hidden 32.
+- 2026-11-18: Job 78301 (temporal net, hidden 32; tests 20/20 on HPC). delta_exact + Adagrad: J 177.03 / IC 0.431 /
+  fc@1TU 1.015, 0 diverged, 1000 gradients, NO teacher at inference = matches classical Adagrad (177.4 / 0.424) on the
+  20 val cases (flat obs: 179.6 / 0.443; no obs: 190.8 / 0.466); train rel 0.064, val rel 0.977. delta (free) + Wolfe:
+  J 183.4 / IC 0.394 (below first guess 0.413; best free-delta result so far; flat obs 659 / 4.24), 0 diverged, 150
+  gradients cap. delta_exact + Wolfe: fails (J 11086, 2 diverged). delta + Adagrad: J 337 / IC 1.25.
+- 2026-11-18: Recap for the pilot: delta_exact Wolfe = 1 Adam step / epoch (494 pairs, batch 1024; train rel 0.86 at
+  epoch 300 = does not fit its own 10 cases), Adagrad = overfit (val best at epoch 1); teacher step in gradient units
+  spans ~4 decades (Hessian-spectrum fingerprint), inputs drop |g| and scale x by climatology. Built (meta_b_direct.py):
+  coords cvt (control-variable transform, case Cholesky of hybrid B), grad_input fixed, obs_feat innov (grad_innov:
+  J, g, innovations from one forward/adjoint run), optimizer lbfgs (full batch, strong Wolfe), max_train_pairs; free
+  delta asserts raw. src/diag_cvt.py (step 1: r = log10 |Delta|/|g| per block raw vs cvt, spread, R^2 on log|g| and
+  log1p k, cos(Delta, -g)). Tests test_direct_delta +3 (cvt: L L^T = B, g_v = autograd dJ/dv, init = GD in v; grad_innov;
+  cvt + innov + L-BFGS fit). HPC: gate job 78424 (tests, diagnostic, 2 smokes; list dev_delta_v5_check.txt) ->
+  job 78425 afterok (list dev_delta_v5.txt: {Wolfe, Adagrad} x {raw, cvt} x {Adam batch 64, L-BFGS}, temporal h32).
+- 2026-11-18: Gate job 78424 passed (test_direct_delta 23/23). Step-1 diagnostic (tmp/logs/diag_cvt.log,
+  tmp/results/dev_delta/diag_cvt.json): the control-variable transform does NOT shrink the spread of the teacher step
+  in gradient units r = log10 |Delta|/|g| (Wolfe x0 3.2 -> 3.5 decades, eta 1.6 = 1.6: per-block constant scaling
+  only shifts r by log10 sigma_q^2 = -3); it lowers cos(Delta, -g) (Adagrad 0.85 -> 0.23: Adagrad is diagonal in RAW
+  coordinates). R^2 of r on log|g| 0.35-0.53 (gradient magnitude explains ~half), on log1p(k) 0.43 for Wolfe x0
+  (L-BFGS first step normalised: r -4.7 at k 0 -> -2.1 at k 40), ~0 elsewhere. -> "badly conditioned" in the sense
+  of coordinates is refuted; magnitude information (|g|) is the useful part. Smokes OK (Wolfe cvt L-BFGS 2 epochs x
+  3 its: J 193.3 / IC 0.295, 0 diverged). Job 78425 (8 runs) running.
+- 2026-11-18: Job 78425 (8 runs, 70 min; 10 train / 20 val, delta_exact temporal h32). Val results (J / IC / diverged;
+  best epoch, best val rel, train rel median at that epoch). Classical on these 20: Wolfe 170.9 / 0.282, Adagrad
+  177.4 / 0.424; first guess IC 0.413. Previous raw Adam-1024 baselines: Wolfe 11086 / -, Adagrad 177.0 / 0.431.
+    Wolfe raw  Adam64  16003 / 27.5 / 0   (ep 109, val 0.971, train 0.918)
+    Wolfe raw  L-BFGS   7297 / 5.14 / 0   (ep 2,   val 0.984; end train median 0.128)
+    Wolfe cvt  Adam64  190.3 / 0.371 / 0  (ep 138, val 0.978, train 0.966)
+    Wolfe cvt  L-BFGS  192.7 / 0.376 / 1  (ep 4,   val 0.981, train 0.973)
+    Ada   raw  Adam64  174.0 / 0.391 / 0  (ep 0,   val 0.863, train 0.163; end train 0.005, val 1.08)
+    Ada   raw  L-BFGS  173.2 / 0.395 / 0  (ep 1,   val 0.829, train 0.106; end train 0.003, val 1.11)
+    Ada   cvt  Adam64  203.9 / 0.376 / 5  (ep 0,   val 0.770)
+    Ada   cvt  L-BFGS  259.0 / 0.411 / 0  (ep 1,   val 0.882)
+  Reading: (2) more optimisation fits the train pairs (Adagrad train 0.003, Wolfe raw L-BFGS 0.13 vs 0.86 before) but
+  val does not improve (best epoch 0-1, then overfit): limit = generalisation from 10 cases, not under-training;
+  L-BFGS vs Adam no difference on val. (3) cvt: no imitation gain (Wolfe val 0.98 everywhere, train cannot fit
+  0.97); it only makes the Wolfe-taught learner STABLE because its initial rule is GD preconditioned by B (selected
+  learners stay near init); with Adagrad cvt is worse (Adagrad is diagonal in raw coordinates). Raw Adagrad learners
+  end below the teacher on these val cases (J 173.2-174.0 vs 177.4, IC 0.39 vs 0.42) at the same 1000 gradients,
+  but with an almost untrained network selected on the same val cases (caveat: dev testbed, val = selection = eval).
+  Wolfe teacher still not imitable from (x, g, k, obs) in any coordinates (val rel >= 0.97).
+- 2026-11-18: History learner built (meta_b_direct.py: lbfgs_pair / lbfgs_two_loop (== LBFGSDirection) /
+  attach_history, base_dir, run_direct own memory + first-step teacher with is_free cost bookkeeping, fit epoch -1
+  candidate in hist mode; temporal_net.HistTemporalNet; dev_delta.sh env NTR). src/report_dev_hist.py: classical
+  Wolfe on the 20 val cases, teacher step-length distribution, cost-to-target (tol 1e-2 / 1e-3) + speed-up per run.
+  Tests +4 (two-loop == LBFGSDirection; Wolfe step = t * two-loop direction of its memory; init + first step + cost
+  bookkeeping; hist fit / checkpoint). Jobs: gate 78466 -> runs 78467 (h6_lbfix, h6_{lb,g}_n{10,100}) -> report 78468.
+- 2026-11-18: Gate 78466 passed (tests incl. the 4 history tests). Smoke (2 epochs) kept epoch -1: the teacher's
+  median step length is exactly 1, so the untrained base-lbfgs learner has val MEDIAN rel error 0 (mean dominated by
+  the few line-search-shrunk steps: train mean 1800). Untrained = fixed-step L-BFGS after a Wolfe first step: J 170.08
+  (teacher 170.9), 41 gradients, 1/20 diverged. -> cancelled 78467/78468; new options delta_exact.train_loss
+  (mean | logmean = mean log(1 + rel)) and delta_exact.select (median | logmean | mean); v6 resubmitted with
+  select logmean (+ train_loss logmean variants): job 78469 (7 runs) -> report 78470.
+- 2026-11-19: Job 78469 (7 history runs, 25 min) + report 78470 (tmp/logs/report_dev_hist.log). 20 val cases; classical
+  strong-Wolfe L-BFGS: J* 170.90, IC 0.282, 15.0 / 27.0 gradients to 1 % / 0.1 % of J* (reached 1.00 by definition).
+  Teacher step length t (k >= 1, 708 val pairs): t = 1 in 91 %, t < 1 in 8 % (p5 0.28) -> the line search costs
+  little: L-BFGS is already ~1 gradient / iteration; the headroom of a learned line search is ~10 %.
+    run (cost to 1 % | 0.1 %; reached; speed-up on cases both reach)       J / IC / div
+    h6_lbfix (untrained = fixed-step L-BFGS after a Wolfe first step)  13.5 (0.90, x1.07) | 23.0 (0.85, x1.04)  170.08 / 0.321 / 1
+    h6_lb_n10        12.5 (0.80, x1.08) | 15.5 (0.50, x1.06)   170.41 / 0.370 / 0   (val logmean 0.298 -> 0.247)
+    h6_lb_n10_log    13.5 (0.80, x1.00) | 19.0 (0.65, x1.05)   170.53 / 0.283 / 3
+    h6_lb_n100       13.0 (0.75, x1.00) | 19.0 (0.65, x1.05)   176.48 / 0.345 / 0   (0.298 -> 0.164)
+    h6_lb_n100_log   13.0 (0.80, x1.08) | 16.0 (0.65, x1.25)   174.83 / 0.328 / 0   (0.298 -> 0.149)
+    h6_g_n10 / n100   9.0 (0.10)        | 15.0 (0.05)          187 / 0.407 / 0      (history-only input fails)
+    previous obs-input learners: dx_wolfe_tmp 48.5 (0.20, x0.12); dx5_wolfe_cvt_adam 22.5 (0.30, x0.40)
+  Reading: history + L-BFGS base = first learners at L-BFGS speed (vs x0.1-0.4 before) and imitation improves with data
+  (100 cases halve the val error), but none beats L-BFGS: same speed on the cases reached, fewer cases reach the
+  target (0.65-0.80 vs 1.00). History as INPUT with a -g base does not work (L-BFGS direction is not learnable from
+  10 cases of pairs). Imitation is capped at the teacher's iteration count; to beat L-BFGS the learner must take
+  better steps than the teacher -> needs an unsupervised objective (J after the move / unrolled J) starting from
+  the L-BFGS base.
+- 2026-11-19: Built attach_horizon (multi-step target) and run_direct safeguard backtrack; tests +2 (horizon target,
+  backtrack monotone + gradient count); dev_delta.sh env PC_OVERRIDE (reuse a pair cache). Jobs: tests 78568 ->
+  v7 runs 78569 (safeguard on v6 learners; h 2 n10 / n100, h 3 n100, each + safeguarded inference) -> report 78570.
+- 2026-11-19: v7 done (tests 29/29; runs 18 min; tmp/logs/report_dev_hist_v7.log). 20 val cases, classical Wolfe
+  L-BFGS 15.0 / 27.0 gradients to 1 % / 0.1 % (reached 1.00). (cost to 1 % (reached, speed-up) | 0.1 % ...; J / IC / div)
+    h6_lbfix 13.5 (0.90 x1.07) | 23.0 (0.85 x1.04)  170.08/0.321/1  ->  +backtrack 14.5 (1.00 x1.03) | 26.0 (0.95 x1.00)  171.00/0.304/0
+    h6_lb_n10 12.5 (0.80 x1.08) | 15.5 (0.50)        170.41/0.370/0  ->  +backtrack  8.5 (0.50 x1.12) | 14.0 (0.35)        178.41/0.349/0
+    h6_lb_n100_log 13.0 (0.80 x1.08) | 16.0 (0.65 x1.25) 174.83/0.328/0 -> +backtrack 11.5 (0.70 x1.00) | 16.0 (0.55 x1.12) 176.48/0.295/0
+    h7_h2_n10  12.0 (0.85 x1.17) | 21.0 (0.80 x1.12)  169.49/0.305/2  ->  +backtrack 12.0 (0.80 x1.12) | 18.0 (0.60 x1.06)  171.02/0.297/0
+    h7_h2_n100 11.0 (0.80 x1.23) | 16.0 (0.55 x1.12)  175.79/0.323/2  ->  +backtrack 11.0 (0.75 x1.18) | 17.0 (0.60 x1.12)  170.98/0.334/0
+    h7_h3_n100 13.0 (0.75 x1.00) | 27.0 (0.55 x0.67)  175.43/0.299/1  ->  +backtrack 10.0 (0.70 x1.15) | 17.0 (0.55 x1.06)  171.82/0.368/0
+  Reading: backtrack removes every divergence (0/20) at no model-run cost and makes the untrained fixed-step L-BFGS as
+  reliable as the classical one (reached 1.00 / 0.95) at the same cost; it does not raise the reached fraction of the
+  trained learners (they settle at other local minima: median J up to 178 vs 170.9, not slower convergence). Horizon 2
+  gives the best speed on reached cases (x1.12-1.23 to 1 %) but reached 0.75-0.85; horizon 3 no better. With 20 val
+  cases one case = 0.05 reached: differences between runs are mostly within noise. No setting beats L-BFGS robustly.
+- 2026-11-19: Online training order built (online_groups; train_mode / online_cases; test_online_groups). Jobs: tests
+  78571 -> v8 runs 78572 (online h 2 n100 / n10, online h 1 n100 control; each + backtrack inference) -> report 78573.
+- 2026-11-19: v8 done (tests 30/30; runs 24 min; tmp/logs/report_dev_hist_v8.log). Online = teacher-run order, 1 Adam
+  step per iteration (14100 steps n100 / 31500 n10). (cost to 1 % (reached, speed-up) | 0.1 %; J / IC / div)
+    h8_on_h2_n100   11.0 (0.75 x1.18) | 24.0 (0.70 x0.92)  172.59/0.319/3  -> +backtrack  8.0 (0.55 x1.25) | 15.0 (0.55 x1.20)  177.78/0.339/0
+    h8_on_h1_n100   15.0 (0.85 x0.93) | 23.0 (0.75 x1.00)  174.85/0.287/1  -> +backtrack 13.0 (0.75 x1.00) | 17.0 (0.55 x1.06)  173.40/0.354/0
+    h8_on_h2_n10    11.0 (0.85 x1.27) | 18.5 (0.80 x1.27)  172.42/0.334/2  -> +backtrack 12.5 (0.90 x1.16) | 20.0 (0.85 x1.20)  170.88/0.330/0
+    (offline v7 +backtrack: h2_n10 12.0 (0.80 x1.12); h2_n100 11.0 (0.75 x1.18))
+  Val imitation (logmean): online h2 n100 0.534 -> 0.393 (ep 12); h1 n100 0.298 -> 0.171; h2 n10 0.517 -> 0.457 (ep 1,
+  then overfits). Two-step target is harder to imitate (0.39 vs 0.17 for one step). Best balance so far: online h2 n10
+  + backtrack (reached 0.90 / 0.85, x1.16 / x1.20, 0 div, J 170.88) but its selected learner is barely trained (epoch 1)
+  and differences between runs are 1-3 of 20 cases -> needs the 200-case val evaluation before any claim.
+- 2026-11-19: v9 = 200-val re-scoring, inference only, backtrack safeguard (job 78614: 2 min total; learners 78-95 s
+  each, classical reference in 10 chunks; tmp/logs/report_dev_hist_v9_val200.log). Classical strong-Wolfe L-BFGS:
+  J* 168.63, IC 0.332, 14.0 / 25.0 gradients to 1 % / 0.1 % (reached 1.00).
+    v9_lbfix_sg (untrained = fixed-step L-BFGS)  13.0 (1.00 x1.08) | 25.0 (0.96 x0.96)  168.61 / 0.334 / 0 div
+    v9_h2_n10_sg   (offline 2-step, 10 cases)    13.0 (0.88 x1.00) | 24.0 (0.75 x0.88)  169.01 / 0.335 / 0
+    v9_h2_n100_sg  (offline 2-step, 100 cases)   10.0 (0.76 x1.10) | 19.0 (0.58 x1.05)  169.42 / 0.365 / 0
+    v9_on_h2_n10_sg (online 2-step, 10 cases)    11.0 (0.89 x1.18) | 21.0 (0.83 x1.07)  168.98 / 0.345 / 0
+  Reading: on 200 cases no learner beats L-BFGS robustly. The safeguarded untrained fixed-step L-BFGS equals the
+  classical one in quality and reliability (1.00 / 0.96) at x1.08 / x0.96. Trained two-step learners are at most
+  x1.1-1.2 faster on the cases they reach, but miss 11-24 % (1 %) / 17-42 % (0.1 %) of cases; the median final J and IC
+  stay close to classical (169.0-169.4 vs 168.6; IC 0.335-0.365 vs 0.332). The 20-case ranking held qualitatively.
+- 2026-11-19: Timing (src/time_dev_hist.py, job 78620; 200 val cases in ONE batched run per method, 1 thread, own core,
+  to the method's stopping rule; every method ran the full 150-iteration budget because some case never met tol):
+  classical strong-Wolfe L-BFGS 225.9 s (1506 ms / iteration, incl. the per-case Python fallback of the line search);
+  learners with backtrack: lbfix 89.9 s (599 ms/it), h2_n10 79.1 s (528), h2_n100 86.8 s (578), online h2_n10 72.9 s
+  (486). Wall x2.5-3.1 lower than classical with the same 150 iterations: no line-search trials and no per-case loop;
+  the network cost is small. Report column added to report_dev_hist.py (tmp/logs/report_dev_hist_v9_val200.log).
+- 2026-11-19: Branch tidy (pilot): findings.md gained the subsection "Learned Δ optimizer without the teacher at
+  inference: conditioning, history, multi-step targets" (methods, 200-val table with wall clock, findings, exact
+  reproduction commands incl. the Table 7 and dense-meta configurations). Then removed all generated command lists:
+  src/scripts/lists/ (dev_delta_v1-v9*, imit_*, tests_delta), src/scripts/dense_meta_*.txt, speed_sweep_*.txt.
+  Their content is in findings.md (Reproduction paragraphs); runners (dev_delta.sh, sb_parallel.sh, *_job.sh, *_run.sh)
+  kept. Pilot question answered: learners beat fixed-step L-BFGS (and Adagrad), not line-search L-BFGS.

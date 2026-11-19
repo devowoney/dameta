@@ -393,3 +393,105 @@ teacher 129, Adagrad 934.
 Sources: src/dameta/da/reference_step.py (method lbfgs_wolfe), src/scripts/dense_meta_job.sh (c1, c1k50; METHOD=lbfgs_wolfe),
 records tmp/results/m5dwW_f1/, teacher check tmp/results/dense/*_lbfgswolfecheck_*.nc, tables
 tmp/results/dense/meta_summary_{test,test_ood}.md.
+
+#### Learned Δ optimizer without the teacher at inference: conditioning, history, multi-step targets (dev testbed; 2026-11-18/19)
+**Setting.** Same long problem (dense observations, weak constraint, F1, σ_q 0.1/√10, control 333). Development testbed:
+one seed, 10 or 100 training cases, selection on the first 20 validation cases; final check on the first 200 validation
+cases (inference only). The learner outputs the update Δ̂ itself (no teacher at inference, one gradient per iteration):
+`delta_exact` = supervised imitation of the teacher update (relative error |Δ̂ − Δ|² / |Δ|²), `delta` = unsupervised.
+Reference: L-BFGS with strong-Wolfe line search (the classical baseline above; same settings). Cost to target = gradient
+evaluations (line-search trials included) to J ≤ J*(1 + tol), J* = the reference's final J of the same case; speed-up =
+median reference cost / median learner cost over the cases both reach.
+
+**1. Conditioning and training (supervised, 20 val cases).** Hypotheses tested: (a) badly scaled inputs (state
+standardised by climatology, |g| removed), (b) under-training (494 teacher pairs, 1 Adam step per epoch), (c) ocean-code
+scaling unsuited to L63. Diagnostic on the teacher pairs: the teacher step in gradient units, r = log10 |Δ|/|g|, spans
+3.2–3.5 decades (x0) and 1.6–2.2 (η) per control block; the 4D-Var control-variable transform (v₀ = L⁻¹(x₀ − x₀ᵇ), B = LLᵀ;
+w = η/σ_q) does not narrow it (it only shifts η by log10 σ_q²) and lowers cos(Δ, −g) (Adagrad 0.85 → 0.23); the gradient
+magnitude explains 35–53 % of the variance of r. Training with Adam (batch 64, ×10–15 more steps) or full-batch L-BFGS
+fits the training pairs (relative error 0.003 Adagrad teacher, 0.13 L-BFGS teacher, vs 0.86 before) but the validation
+error does not improve (best epoch 0–1, ≥ 0.83). With the L-BFGS teacher the imitation error stays ≥ 0.97 in every
+coordinate system; scaling with 10 / 50 / 200 / 1000 training cases gives 0.98 / 0.97 / 0.96 / 0.95 (0.86 with the
+previous move and gradient change as input). → The limit is information (the L-BFGS memory), not conditioning or
+optimisation.
+
+**2. History input (supervised; 20 val cases; reference 15.0 / 27.0 gradients to tol 1 % / 0.1 %).** Input = the
+L-BFGS memory: the m = 10 most recent pairs (s = x^{k+1} − x^k, y = g^{k+1} − g^k), one token per observation time with
+the state and gradient, 1-D convolution along time (no observations). Output relative to a base direction: −g, or the
+L-BFGS two-loop direction −Hg of the same memory (the untrained learner is then fixed-step L-BFGS). Iteration 0 = one
+classical strong-Wolfe iteration (counted), the learner from k = 1. Every reference step after the first is exactly
+t × (two-loop direction of its memory), with t = 1 in 91 % of the steps (t < 1 in 8 %, 5th percentile 0.28): the line
+search mostly accepts its first trial, so the reference already costs about one gradient per iteration.
+| learner | to 1 %: gradients (reached, speed-up) | to 0.1 % | final J / IC / diverged |
+|---|---|---|---|
+| untrained, base −Hg (fixed-step L-BFGS) | 13.5 (0.90, ×1.07) | 23.0 (0.85, ×1.04) | 170.1 / 0.321 / 1 |
+| base −Hg, 10 cases | 12.5 (0.80, ×1.08) | 15.5 (0.50, ×1.06) | 170.4 / 0.370 / 0 |
+| base −Hg, 100 cases, log loss | 13.0 (0.80, ×1.08) | 16.0 (0.65, ×1.25) | 174.8 / 0.328 / 0 |
+| base −g (history as input only) | 9.0 (0.10) | 15.0 (0.05) | 187 / 0.407 / 0 |
+| observation input (previous version) | 22.5–48.5 (0.20–0.30, ×0.12–0.40) | — | 190–11086 |
+The memory makes the learner as fast as the reference (×0.1–0.4 before); without the −Hg base it cannot rebuild the
+L-BFGS direction. Selection note: the median validation error is 0 for the untrained −Hg learner (median t = 1), so the
+best epoch is chosen on the mean of log(1 + relative error).
+
+**3. Multi-step targets, online training, safeguard.** Two-step target: the move at k is supervised by the teacher
+displacement Δ_k + Δ_{k+1} = x^{k+2} − x^k (one gradient per two teacher steps: ceiling ×2); three steps likewise.
+Online variant: the teacher run is replayed in iteration order (teacher forcing, identical to a live run), one Adam step
+per iteration on the moves made at k once their target is known. Inference safeguard (backtrack): the gradient
+evaluation at x^{k+1} also returns J(x^{k+1}); a move that does not decrease J is rejected and halved, with no extra model
+run (memory, stopping rule and returned analysis = last accepted iterate). Imitation error (mean log(1 + rel)): 0.17
+one step vs 0.39 two steps (100 cases). On 20 val cases the safeguard removed every divergence; three steps were no
+better than two; online and offline were within noise (1–3 cases).
+
+**Table — 200 validation cases, inference only, all learners with the safeguard.** Reference: J* 168.63, IC 0.332,
+14.0 / 25.0 gradients to tol 1 % / 0.1 % (reached 1.00). Wall clock: all 200 cases in one batched run per method,
+1 thread, own core; every method ran its 150-iteration budget (some case never met the stopping tolerance).
+| method | to 1 %: gradients (reached, speed-up) | to 0.1 % | final J / IC / diverged | wall, 200 cases (per iteration) |
+|---|---|---|---|---|
+| L-BFGS, strong Wolfe (reference) | 14.0 (1.00) | 25.0 (1.00) | 168.63 / 0.332 / 0 | 225.9 s (1506 ms) |
+| untrained fixed-step L-BFGS (Wolfe first step) | 13.0 (1.00, ×1.08) | 25.0 (0.96, ×0.96) | 168.61 / 0.334 / 0 | 89.9 s (599 ms) |
+| two-step, offline, 10 cases | 13.0 (0.88, ×1.00) | 24.0 (0.75, ×0.88) | 169.01 / 0.335 / 0 | 79.1 s (528 ms) |
+| two-step, offline, 100 cases | 10.0 (0.76, ×1.10) | 19.0 (0.58, ×1.05) | 169.42 / 0.365 / 0 | 86.8 s (578 ms) |
+| two-step, online, 10 cases | 11.0 (0.89, ×1.18) | 21.0 (0.83, ×1.07) | 168.98 / 0.345 / 0 | 72.9 s (486 ms) |
+
+**Findings.**
+1. *Learned optimizers beat L-BFGS without a line search, not L-BFGS with one.* Against fixed-step L-BFGS (and Adagrad)
+   the learned step length gives ×2.8–5 fewer model runs (previous subsection). Against the strong-Wolfe reference no
+   learner is faster in gradient evaluations by more than ×1.0–1.2, and the trained ones reach the target in 11–24 %
+   (1 %) / 17–42 % (0.1 %) fewer cases: on their own trajectories they settle in nearby, slightly worse local minima
+   (median final J within 0.5 % of the reference, IC 0.335–0.365 vs 0.332).
+2. *There is little room to beat it here.* The line search accepts its first trial in 91 % of the steps, so the
+   reference spends about one gradient per iteration; imitation is bounded by its iteration count, and a two-step target
+   (ceiling ×2) is harder to imitate (error 0.39 vs 0.17) and gains ≤ ×1.2.
+3. *A free safeguard makes teacher-free inference as reliable as the reference.* Rejecting and halving moves that raise J
+   (no extra model run) removes all divergences; fixed-step L-BFGS with a classical first step and this safeguard matches
+   the reference in quality and reach (1.00 / 0.96) at the same gradient count.
+4. *Wall clock.* All teacher-free methods are ×2.5–3.1 faster than the reference in our implementation, because they skip
+   the line-search trials and its per-case fallback loop; the untrained safeguarded fixed-step L-BFGS already gets ×2.5,
+   so this gain comes from dropping the line search, not from learning; the network itself is cheap.
+5. *Next step if pursued:* steps better than the teacher's need an unsupervised objective (J after the move, or summed
+   over a few unrolled moves), starting from the safeguarded fixed-step L-BFGS learner.
+
+**Reproduction (dev testbed).** `bash src/scripts/dev_delta.sh <name> delta_exact lbfgs_wolfe "<overrides>"` (dense weak
+F1, val split; env NTR = train cases (10), NVAL = val cases (20), PC_OVERRIDE = teacher-pair cache), on the HPC through
+`sbatch src/scripts/sb_parallel.sh <command list> <project root>`. Common history overrides: `delta_exact.hist_m=10
+delta_exact.first_step=teacher delta_exact.hidden=32 delta_exact.batch_size=64 delta_exact.select=logmean
+delta_exact.base=lbfgs`; then untrained `epochs=0`; 10 cases `epochs=300`; 100 cases (NTR=100) `epochs=100
+train_loss=logmean`; two / three steps `horizon=2|3 train_loss=logmean`; online `train_mode=online online_cases=10|100`;
+inference with the safeguard `checkpoint=<learner .pt> delta_exact.safeguard=backtrack` (NVAL=200 for the final table).
+Conditioning runs: `delta_exact.obs_input=true delta_exact.arch=temporal delta_exact.hidden=32` with `batch_size=64` or
+`optimizer=lbfgs` (Adagrad teacher: `max_train_pairs=3000`), and `coords=cvt grad_input=fixed obs_feat=innov`.
+Reports: `python src/diag_cvt.py`; `python src/report_dev_hist.py [--nval 200] <names>` (classical reference in chunks:
+`--nval 200 --chunk a b`); timing `python src/time_dev_hist.py classical | <name> <checkpoint>`. Imitation scaling:
+`python src/diag_imitation.py collect|fit`. Logs tmp/logs/{dev_delta_*,report_dev_hist*,diag_cvt,timing_val200_*}.log,
+records tmp/results/dev_delta/, learners tmp/meta/dev_delta/.
+Earlier list files (dense meta runs, speed sweep) are reproduced by `bash src/scripts/dense_meta_job.sh <cell> <seed>
+"test test_ood" [overrides]` for cells c1, c1k50, c5, c5k50, c8a (`learned_grad.epochs=100`), seeds 0–2, and by
+`bash src/scripts/speed_sweep_job.sh <model> <name> <teacher lr> <seed> "<overrides>" [splits]` with the configurations of
+Table 7.
+Table 7 configurations (`speed_sweep_job.sh f1|emulator <name> <teacher lr> <seed> "<overrides>"`; final runs seeds 0–2,
+splits "test test_ood"). Cell 1 common overrides: `variant=delta delta.output=stretch delta.episode_iters=100
+delta.w_perf_delta=2.5 delta.grad_trans_steps=2 delta.meta_lr=1e-2 delta.n_epochs=3 delta.select_epoch=true
+delta.train_seed=<seed>`; val grid (seed 0): teacher lr {0.3, 0.1} × `net.output_scale` {10, 20} × `delta.grad_align_steps`
+{0, 2} (+ `delta.select_k=5` variant); selected `c1_lr01_os10_a2` = lr 0.1, `delta.grad_align_steps=2 net.output_scale=10`.
+Cell 5: `variant=unroll unroll.seed=<seed> unroll.loss=sum|final unroll.K=<K>`; val grid K {5, 10, 20} sum, K 10 final,
+K 10 sum with `unroll.step_scale=0.3` (teacher lr 0.3); carried to test `c5_sum_K20` (loss sum, K 20).

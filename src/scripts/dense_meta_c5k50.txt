@@ -1,3 +1,0 @@
-c5k50|0|test test_ood|
-c5k50|1|test test_ood|
-c5k50|2|test test_ood|
