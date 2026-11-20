@@ -23,6 +23,7 @@ Record (NetCDF, dims ic, k, kstep, lead, var[, ctrl_t, param]):
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import hydra
@@ -162,10 +163,49 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
     )
     if weak:
         out["eta_final"] = (("ic", "ctrl_t", "var"), res["eta_final"])
+    if "grad_cum" in res:          # gradient evaluations (incl. line-search trials) spent to reach iterate k
+        out["grad_cum"] = (("ic", "k"), res["grad_cum"])
     if cfg.problem == "bpe":
         out["theta_a"] = (("ic", "param"), theta_a.numpy())
         out = out.assign_coords(param=["sigma", "rho", "beta"])
     return out
+
+
+class G1Recorder:
+    """
+    on_step hook of run_fourdvar: at every iterate c^k (cases still active)
+        g1_grad[k] = cos(g^k, grad J_true(c^k))            gradient the optimizer consumes vs the true sensitivity
+        g1_move[k] = cos(c^{k+1} - c^k, -grad J_true(c^k))  the move actually applied vs the true descent direction
+    J_true = same problem (obs, first guess, hybrid B, Q) with the true model (L63 rho 28). Frozen cases: NaN.
+    """
+
+    def __init__(self, P: dict, cost):
+        self.true_cost = FourDVarCost(truth_step(P["ds"]), P["y"], P["mask"], P["x0_b"], P["ccfg"], weak=P["weak"],
+                                      b_inv=P["b_inv"])
+        self.n = P["x0_b"].shape[0]
+        self.g1_grad, self.g1_move = [], []
+        self.prev = None                                   # (c^k, grad J_true(c^k), active) of the previous call
+        self.time_s = 0.0                                  # own wall-clock, subtracted from the optimizer's wall_s
+
+    def __call__(self, k, c, g, active):
+        t0 = time.perf_counter()
+        cos = torch.nn.functional.cosine_similarity
+        _, g_true = self.true_cost.grad(c.detach())
+        act = active.bool()
+        nan = torch.full((self.n,), float("nan"), dtype=c.dtype)
+        self.g1_grad.append(torch.where(act, cos(g, g_true, dim=1), nan))
+        if self.prev is not None:                          # the move from the previous iterate is now known
+            c_p, gt_p, act_p = self.prev
+            self.g1_move.append(torch.where(act_p, cos(c.detach() - c_p, -gt_p, dim=1), nan))
+        self.prev = (c.detach().clone(), g_true, act)
+        self.time_s += time.perf_counter() - t0
+
+    def arrays(self, max_iter: int):
+        """(g1_grad [ic, k], g1_move [ic, kstep]) as DataArray tuples padded with NaN to the record length."""
+        def pad(lst, length):
+            a = torch.stack(lst, 1).numpy() if lst else np.zeros((self.n, 0))
+            return np.concatenate([a, np.full((self.n, length - a.shape[1]), np.nan)], 1)
+        return (("ic", "k"), pad(self.g1_grad, max_iter + 1)), (("ic", "kstep"), pad(self.g1_move, max_iter))
 
 
 def run(cfg: DictConfig) -> xr.Dataset:
@@ -184,9 +224,19 @@ def run(cfg: DictConfig) -> xr.Dataset:
                                                      weak=P["weak"], b_inv=P["b_inv"]))
         else:
             raise ValueError(cfg.gradient)
-    res = run_fourdvar(cost, P["x0_b"], cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
+    # ICE table (2026-11-19, flag g1_iter): per-iterate gradient fidelity w.r.t. the TRUE dynamics, recorded by a
+    # read-only hook (its true-model gradients are reporting only: not counted in n_grad_evals / grad_cum).
+    hook, g1 = (None, None)
+    if cfg.get("g1_iter", False):
+        g1 = G1Recorder(P, base)
+        hook = g1
+    res = run_fourdvar(cost, P["x0_b"], cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol), on_step=hook)
     conf = f"{cfg.problem}:{cfg.model}" + (f":{cfg.emulator}" if cfg.model == "emulator" else "")
     out = evaluate_v2(cfg, P, res, conf)
+    if g1 is not None:
+        out["g1_grad"], out["g1_move"] = g1.arrays(int(cfg.max_iter))
+        out.attrs["wall_s"] = float(out.attrs["wall_s"]) - g1.time_s     # optimizer time only
+        out.attrs["g1_hook_s"] = g1.time_s
     if cfg.gradient != "exact":
         out.attrs["gradient"] = cfg.gradient
         out.attrs["n_fwd_model_total"] = int(cost.n_fwd_model)      # forward runs of F1 (all cases, batched)

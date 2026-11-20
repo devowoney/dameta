@@ -21,6 +21,13 @@ Order per iteration: g^k -> f^k -> meta step (l_perf through the stored graph, b
 Delta_hat^k with the updated theta (graph stored) -> x^{k+1}.
 Magnitude init l0 from one teacher run on the train cases (as delta_exact); best epoch by the frozen val score
 J(x^{select_k}) over val cases (no teacher; default 90th percentile, diverged = inf).
+
+History mode (2026-11-19, ICE table cell 2; learner.cfg.hist_m > 0): the SAME input / output law as the supervised
+learner (delta_exact, cell 1): input = state, gradient and the L-BFGS memory of the learner's OWN moves (m most recent
+pairs s = x^{k+1} - x^k, y = g^{k+1} - g^k, updated exactly as in run_direct), output relative to the L-BFGS
+two-loop direction of that memory (base lbfgs: untrained learner = fixed-step L-BFGS). With first_step teacher the
+move at iteration 0 is the teacher's (one strong-Wolfe L-BFGS iteration), as at inference; learning starts at k = 1.
+The training signal is unchanged (l_perf through the stored graph + small align + reg): the memory is treated as data.
 """
 
 import copy
@@ -32,7 +39,7 @@ import torch
 
 from ..da.cost import FourDVarCost
 from ..da.reference_step import ReferenceStep
-from .meta_b_direct import DirectDelta, run_direct
+from .meta_b_direct import DirectDelta, lbfgs_pair, run_direct
 
 TINY = torch.finfo(torch.float64).tiny
 
@@ -57,8 +64,8 @@ class FreeDeltaConfig:
 def free_delta_episode(learner: DirectDelta, cost: FourDVarCost, c0: torch.Tensor, method: str, lr: float,
                        n_iter: int, opt: Optional[torch.optim.Optimizer], cfg: FreeDeltaConfig) -> dict:
     """One online training episode on a batch of cases (opt=None: no theta update)."""
-    assert learner.cfg.coords == "raw" and learner.cfg.obs_feat == "y" and not learner.cfg.hist_m, \
-        "unsupervised free delta: coords cvt / innovation features / history not implemented yet (delta_exact only)"
+    assert learner.cfg.coords == "raw" and learner.cfg.obs_feat == "y", \
+        "unsupervised free delta: coords cvt / innovation features not implemented (delta_exact only)"
     net = learner.net
     params = list(net.parameters())
     n_params = sum(p.numel() for p in params)
@@ -67,14 +74,30 @@ def free_delta_episode(learner: DirectDelta, cost: FourDVarCost, c0: torch.Tenso
     teacher = ReferenceStep(c, method=method, lr=lr, cost=cost if method == "lbfgs_wolfe" else None)
     ok = torch.ones(c.shape[0], dtype=torch.bool)
     prev, diag = None, []
+    m = learner.cfg.hist_m                                           # history mode (cell 2): own L-BFGS memory
+    S = Y = None
+    if m:
+        S, Y = (torch.zeros(c.shape[0], m, c.shape[1], dtype=c.dtype) for _ in range(2))
+    c_prev = g_prev = None
+    teacher_first = learner.cfg.first_step == "teacher"
     net.train()
     for k in range(n_iter):
         j, g = cost.grad(c)
         ok = ok & torch.isfinite(j) & torch.isfinite(g).all(1)
         if not ok.any():
             break
+        if m and c_prev is not None:                                 # memory update with the move actually applied
+            s_new, y_new = lbfgs_pair(torch.nan_to_num(c - c_prev), torch.nan_to_num(g - g_prev))
+            S, Y = torch.cat([S[:, 1:], s_new[:, None]], 1), torch.cat([Y[:, 1:], y_new[:, None]], 1)
+        c_prev, g_prev = c.clone(), g.clone()
+        hist = (lambda rows: (S[rows], Y[rows])) if m else (lambda rows: None)   # noqa: E731
         with torch.no_grad():
             f = teacher(c, g, ok.to(c.dtype), j=j)
+        if k == 0 and teacher_first:                                 # classical first step, nothing to learn
+            c = c - f
+            prev = None
+            diag.append({"k": k, "J_med": float(j[ok].median()), "step_ratio_med": 1.0})
+            continue
         d = {"k": k, "J_med": float(j[ok].median())}
         if opt is not None:
             opt.zero_grad()
@@ -85,7 +108,8 @@ def free_delta_episode(learner: DirectDelta, cost: FourDVarCost, c0: torch.Tenso
             a_ok = ok & torch.isfinite(den_a) & (den_a > 0)
             if a_ok.any():
                 o = obs[a_ok] if obs is not None else None
-                l_align = ((learner.delta(c[a_ok], g[a_ok], k, o) - tgt[a_ok]).pow(2).sum(1) / den_a[a_ok]).mean()
+                l_align = ((learner.delta(c[a_ok], g[a_ok], k, o, hist=hist(a_ok)) - tgt[a_ok]).pow(2).sum(1)
+                           / den_a[a_ok]).mean()
                 l_meta = l_meta + cfg.w_align * l_align
                 d["L_align"] = float(l_align.detach())
             if prev is not None:
@@ -99,9 +123,15 @@ def free_delta_episode(learner: DirectDelta, cost: FourDVarCost, c0: torch.Tenso
                 torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip_norm)
                 if all(torch.isfinite(p.grad).all() for p in params if p.grad is not None):
                     opt.step()
-        D = learner.delta(c, g, k, obs)                              # move with the updated theta; graph kept
+        D = learner.delta(c, g, k, obs, hist=hist(slice(None)))     # move with the updated theta; graph kept
         D_ok = ok & torch.isfinite(D).all(1)
-        prev = {"D": D, "ok": D_ok, "den": (g * f).sum(1).clamp_min(TINY)}
+        # l_perf denominator <g, f> of the teacher step at the same point. Fix 2026-11-19 (ICE cell 2): a case whose
+        # teacher step is not a real descent step (converged: f = 0, or <g, f> ~ 0) is left out of l_perf instead of
+        # clamping the denominator to TINY, which made its l_perf ~1e289 and let converged cases set the update
+        # direction (all strong episodes, ~30 % of weak ones in the first ICE run).
+        den = (g * f).sum(1)
+        den_ok = torch.isfinite(den) & (den > 1e-12 * g.norm(dim=1) * f.norm(dim=1)) & (f.norm(dim=1) > 0)
+        prev = {"D": D, "ok": D_ok & den_ok, "den": torch.where(den_ok, den, torch.ones_like(den))}
         with torch.no_grad():
             step = torch.where(D_ok[:, None], D.detach(), torch.zeros_like(c))
             d["step_ratio_med"] = float((step.norm(dim=1) / f.norm(dim=1).clamp_min(TINY))[ok].median())

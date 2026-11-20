@@ -107,12 +107,17 @@ def train_learner(cfg: DictConfig, step, d: int, ctrl_mean, ctrl_std):
         ncfg = DirectConfig(hidden=cfg.net.hidden, n_layers=cfg.net.n_layers, emb_dim=cfg.net.emb_dim,
                             log_k=cfg.net.log_k, K=int(dk["K"]), seed=fcfg.train_seed,
                             obs_input=bool(dk.get("obs_input", False)), arch=str(dk.get("arch", "mlp")),
-                            kernel=int(dk.get("kernel", 5)))
+                            kernel=int(dk.get("kernel", 5)),
+                            # ICE cell 2 (2026-11-19): history input + L-BFGS base + Wolfe first step (as delta_exact)
+                            hist_m=int(dk.get("hist_m", 0)), base=str(dk.get("base", "grad")),
+                            first_step=str(dk.get("first_step", "learner")))
         learner = build_direct(d, ncfg, ctrl_mean, ctrl_std, n_obs=ptr.ccfg.n_obs)
         cache = dk.get("pairs_cache")
         pairs = collect_delta_pairs(make_tr(), xb_tr, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol),
                                     cache=f"{cache}_train.pt" if cache else None)
-        learner.init_magnitude(pairs)                       # l0 = median teacher step size (gradient units)
+        # l0 = median teacher step size (gradient units; history mode: in units of the L-BFGS base direction, so the
+        # pairs first get their memory attached, and the classical first step is left out)
+        learner.init_magnitude(learner.prepare_pairs(pairs, make_tr()) if ncfg.hist_m else pairs)
         if not fcfg.episode_iters:                          # 0 = teacher mean iterations on the train cases
             fcfg.episode_iters = int(np.ceil(len(pairs["k"]) / len(xb_tr)))
         va = problem(cfg, "val", cfg.delta.select_n_val) if fcfg.select_epoch else None
@@ -293,7 +298,8 @@ def run(cfg: DictConfig) -> xr.Dataset:
     xb = ev.x0_b
     if free:                                                     # delta_exact / delta (free): no teacher
         res = run_direct(cost, xb, learner, int(cfg.max_iter), float(cfg.tol),
-                         safeguard=str(cfg.delta_exact.get("safeguard", "none")))   # inference option
+                         safeguard=str((cfg.delta_exact if cfg.variant == "delta_exact" else cfg.delta)
+                                       .get("safeguard", "none")))                  # inference option
     elif cfg.variant in ("delta", "lookahead"):
         res = run_meta_b(cost, xb, learner, cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol))
     elif cfg.variant == "greedy":
@@ -322,6 +328,8 @@ def run(cfg: DictConfig) -> xr.Dataset:
         out["grad_cum"] = (("ic", "k"), res["grad_cum"])
     if "n_fwd_evals" in res:
         out["n_fwd_evals"] = (("ic",), res["n_fwd_evals"])
+    if "fwd_cum" in res:          # ICE cell 4: forward runs (line-search trials included) spent to reach iterate k
+        out["fwd_cum"] = (("ic", "k"), res["fwd_cum"])
     out.attrs["train_info"] = json.dumps({k: v for k, v in info.items()}, default=float)
     return out
 

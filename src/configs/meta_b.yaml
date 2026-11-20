@@ -57,6 +57,10 @@ delta:                        # UNSUPERVISED delta. output free (default, 2026-1
   select_epoch: false         # keep the best epoch by val score (median J after select_k frozen iterations)
   select_k: 10
   select_n_val: 100           # first n val ICs used for the epoch score
+  hist_m: 0                   # free, ICE cell 2: > 0 = L-BFGS memory input of the learner's own moves (as delta_exact)
+  base: grad                  # free + history: base direction grad (-g) | lbfgs (two-loop -H g of the own memory)
+  first_step: learner         # free: learner | teacher (iteration 0 = one strong-Wolfe L-BFGS iteration, counted)
+  safeguard: none             # free, INFERENCE: none | backtrack (reject + halve a move that did not decrease J)
 
 supervised:
   hidden: 128
@@ -143,6 +147,8 @@ unroll:                       # learned optimization (M5 cells 5 = use_grad true
   seed: 0
   n_val: 200                  # val ICs for best-epoch selection (mean J(x^K) / J(x^0); loss=sum: mean over m)
   loss: final                 # final: J(x^K)/J(x^0) | sum: mean_m J(x^m)/J(x^0) (speed-weighted, 2026-11-16)
+  base: none                  # none | lbfgs (ICE cell 3: move = L-BFGS direction of its own moves + learned correction)
+  safeguard: none             # none | backtrack (base lbfgs: reject + halve a move whose J did not decrease; no extra run)
 
 learned_grad:                 # M5 cell 8: adjoint-free learned gradient (grad J_o from one forward run)
   surrogate_emulator: rho275  # supervision = this emulator's autodiff (grad J_o, or one-interval Jacobians)

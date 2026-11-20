@@ -3,6 +3,8 @@ Reference (teacher) update rule f of  c^{k+1} = c^k - f(c^k)  — ported from bi
 
     method "gd"      : f = lr * g
     method "adagrad" : f = torch.optim.Adagrad step on g, with its own state (sum of g^2), advanced once per call
+    method "adam"    : f = torch.optim.Adam step on g (2026-11-19, ICE-table reference), default betas (0.9, 0.999),
+                       bias-corrected first / second moments, advanced once per call
 
 How it works for torch optimizers (as in bice): the optimizer owns a private "shadow" copy of the control. Each call
 copies c^k into it, takes one optimizer step with g as its gradient, and reads back f = c^k - shadow. The real control
@@ -10,7 +12,7 @@ is never touched. Call exactly once per outer gradient so the optimizer state ev
 The same object is the classical optimizer of E1/E3 AND the teacher step stretched by Meta-B (milestone 4).
 
 Changes vs bice: ocean mask removed; optional `active` mask [n] freezes converged cases (their step is set to 0).
-Adagrad accumulators are element-wise, so batched cases stay independent.
+Adagrad / Adam accumulators are element-wise, so batched cases stay independent.
 """
 
 from typing import Optional
@@ -64,7 +66,7 @@ class LBFGSDirection:
 
 class ReferenceStep:
     """
-    Methods: "gd", "adagrad", "lbfgs" (fixed step lr * d) and "lbfgs_wolfe" (2026-11-17).
+    Methods: "gd", "adagrad", "adam" (2026-11-19), "lbfgs" (fixed step lr * d) and "lbfgs_wolfe" (2026-11-17).
 
     "lbfgs_wolfe" = the classical REFERENCE L-BFGS step, i.e. one iteration of torch.optim.LBFGS with
     line_search_fn="strong_wolfe" and the settings of run_dense_v2.opt_lbfgs (history 10, lr 1, tolerance_change 1e-14,
@@ -89,18 +91,20 @@ class ReferenceStep:
             if cost is None:
                 raise ValueError("method 'lbfgs_wolfe' needs cost")
             self._lbfgs = LBFGSDirection(**optim_kwargs)
-        elif self.method == "adagrad":
+        elif self.method in ("adagrad", "adam"):
             self._shadow = control_like.detach().clone().requires_grad_(True)  # private leaf tensor (holds state)
-            self.optimizer = torch.optim.Adagrad([self._shadow], lr=self.lr, **optim_kwargs)
+            opt_class = torch.optim.Adagrad if self.method == "adagrad" else torch.optim.Adam
+            self.optimizer = opt_class([self._shadow], lr=self.lr, **optim_kwargs)
         elif self.method == "lbfgs":
             self._lbfgs = LBFGSDirection(**optim_kwargs)
         elif self.method != "gd":
-            raise ValueError(f"unknown reference method {method!r} (expected gd, adagrad, lbfgs or lbfgs_wolfe)")
+            raise ValueError(f"unknown reference method {method!r} (expected gd, adagrad, adam, lbfgs or lbfgs_wolfe)")
 
     def describe(self) -> str:
         if self.method == "lbfgs_wolfe":
             return "L-BFGS(strong Wolfe line search)"
-        name = "L-BFGS(fixed step)" if self._lbfgs else ("GD" if self.optimizer is None else "Adagrad")
+        names = {"gd": "GD", "adagrad": "Adagrad", "adam": "Adam", "lbfgs": "L-BFGS(fixed step)"}
+        name = names[self.method]
         return f"{name}(lr={self.lr:g})"
 
     def is_free(self, c: torch.Tensor) -> torch.Tensor:

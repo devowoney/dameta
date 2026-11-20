@@ -16,6 +16,20 @@ obs_input=True (no-gradient option): appends the case observations y (standardis
 
 Inference is a fixed budget (no stopping rule): n_grad_evals = K (cell 5) or 0 (cell 7). J is evaluated at every
 iterate for reporting / cost-to-target only (not counted), as the reporting forward of the other runners.
+
+base="lbfgs" (2026-11-19, ICE table cell 3): the move is the L-BFGS direction of the learner's OWN moves plus the
+learned bounded correction,
+    x^{m+1} = x^m - (H(M^m) g^m + step_scale * ctrl_std * U_theta(...)),
+H(M^m) g^m = two-loop recursion over the 10 most recent (s, y) pairs of the moves actually made (reference_step.
+LBFGSDirection; unit-length first move). The memory is treated as data (first order). Zero-initialised U: the
+untrained learner is fixed-step L-BFGS (lr 1); training (loss sum) learns where to deviate from it.
+
+safeguard="backtrack" (2026-11-20, ICE cell 3, as cells 1 / 2 at inference): without a line search, fixed-step
+L-BFGS blows up on some chaotic cases (J -> inf -> NaN), which poisoned the batch-mean loss (NaN weights from the first
+epoch in the first ICE run). With backtrack, the gradient evaluation at a trial point x^{m+1} also gives J(x^{m+1});
+a move with non-finite or increased J is REJECTED and halved from the last accepted point (no extra model run). The
+memory, the next move and the loss / record use ACCEPTED iterates only; the last trial point (after K gradients) is
+kept only if its J (reporting evaluation, not counted) is not larger. Accepted J <= J(x^0): the loss ratio is bounded.
 """
 
 import copy
@@ -27,6 +41,7 @@ import numpy as np
 import torch
 
 from ..da.cost import FourDVarCost
+from ..da.reference_step import LBFGSDirection
 from .networks import FreeUpdateNet
 
 TINY = torch.finfo(torch.float64).tiny
@@ -45,6 +60,8 @@ class UnrollConfig:
     grad_clip: float = 1.0
     seed: int = 0
     loss: str = "final"              # final: J(x^K)/J(x^0) | sum: mean_m J(x^m)/J(x^0), m = 1..K (rewards fast descent)
+    base: str = "none"               # none | lbfgs (ICE cell 3: move = L-BFGS direction of own moves + correction)
+    safeguard: str = "none"          # none | backtrack (base lbfgs: reject + halve a move whose J did not decrease)
 
 
 def standardize_grad(g: torch.Tensor, d: int) -> torch.Tensor:
@@ -83,6 +100,12 @@ class LearnedOptimization:
         obs = self._obs(cost)
         x, xs, js, gs, n_grad = x0, [x0.detach()], [], [], 0
         xg = []                                           # graph-carrying iterates (train, loss="sum")
+        lbfgs = None
+        if getattr(self.cfg, "base", "none") == "lbfgs":
+            assert self.cfg.use_grad and not self.cfg.second_order, "base lbfgs: gradient input, first order"
+            lbfgs = LBFGSDirection(history=10)            # memory of the learner's own moves (data)
+        if lbfgs is not None and getattr(self.cfg, "safeguard", "none") == "backtrack":
+            return self._unroll_backtrack(cost, x0, train, K, diag, obs, lbfgs)
         for m in range(K):
             g = None
             if self.cfg.use_grad:
@@ -99,11 +122,46 @@ class LearnedOptimization:
                     gs.append(g.detach())
             elif diag:
                 gs.append(cost.grad(x.detach())[1])      # diagnostics only (not counted)
-            x = x - self.delta(x, g, m, obs)
+            if lbfgs is not None:
+                x = x - (lbfgs(x.detach(), g.detach()) + self.delta(x, g, m, obs))
+            else:
+                x = x - self.delta(x, g, m, obs)
             xs.append(x.detach())
             if train:
                 xg.append(x)
         return {"x": x, "xs": xs, "J_grad": js, "n_grad": n_grad, "g": gs, "x_graph": xg}
+
+    def _unroll_backtrack(self, cost, x0, train, K, diag, obs, lbfgs) -> dict:
+        """Base lbfgs + backtrack safeguard (first order: J, g at the trial points are data)."""
+        x, xs, js, gs, xg = x0, [x0.detach()], [], [], []
+        x_acc = j_acc = g_acc = None
+        for m in range(K):
+            j, g = cost.grad(x.detach())
+            js.append(j.detach())
+            if diag:
+                gs.append(g.detach())
+            if m == 0:                                    # first guess: accepted by definition
+                acc = torch.ones_like(j, dtype=torch.bool)
+                x_acc, j_acc, g_acc = x, j, g
+            else:
+                acc = torch.isfinite(j) & torch.isfinite(g).all(1) & (j <= j_acc)
+                x_acc = torch.where(acc[:, None], x, x_acc)
+                j_acc = torch.where(acc, j, j_acc)
+                g_acc = torch.where(acc[:, None], torch.nan_to_num(g), g_acc)
+                xs.append(x_acc.detach())
+                if train:
+                    xg.append(x_acc)
+            # accepted cases: new move from the accepted point; rejected cases: halve the rejected move
+            step = lbfgs(x_acc.detach(), g_acc.detach()) + self.delta(x_acc, g_acc, m, obs)
+            x = torch.where(acc[:, None], x_acc - step, x_acc + (x - x_acc) / 2)
+        with torch.no_grad():                             # last trial point: reporting evaluation, not counted
+            j_last = cost(*cost.unpack(x.detach()))
+        keep = torch.isfinite(j_last) & (j_last <= j_acc)
+        x_fin = torch.where(keep[:, None], x, x_acc)
+        xs.append(x_fin.detach())
+        if train:
+            xg.append(x_fin)
+        return {"x": x_fin, "xs": xs, "J_grad": js, "n_grad": K, "g": gs, "x_graph": xg}
 
     # ---- training --------------------------------------------------------------------------------------------
     def loss(self, cost: FourDVarCost, x0: torch.Tensor) -> torch.Tensor:
@@ -125,25 +183,34 @@ class LearnedOptimization:
         best, best_state, hist = float("inf"), None, []
         n = x0_train.shape[0]
         for ep in range(cfg.epochs):
-            t0, tot = time.perf_counter(), 0.0
+            t0, tot, n_skip = time.perf_counter(), 0.0, 0
             self.net.train()
             perm = rng.permutation(n)
             for b0 in range(0, n, cfg.batch):
                 idx = np.sort(perm[b0:b0 + cfg.batch])
                 opt.zero_grad()
                 loss = self.loss(make_cost(idx), x0_train[idx])
+                if not torch.isfinite(loss):                  # NaN guard (2026-11-20): skip a non-finite batch
+                    n_skip += 1
+                    continue
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), cfg.grad_clip)
-                opt.step()
+                if all(torch.isfinite(p.grad).all() for p in self.net.parameters() if p.grad is not None):
+                    opt.step()
+                else:
+                    n_skip += 1
                 tot += float(loss.detach()) * len(idx)
             self.net.eval()
             vl = float(self.loss(val_cost, x0_val).detach())   # grad enabled: the unroll needs grad J
-            h = {"epoch": ep, "train_ratio": tot / n, "val_ratio": vl, "s": time.perf_counter() - t0}
+            h = {"epoch": ep, "train_ratio": tot / n, "val_ratio": vl, "skipped_batches": n_skip,
+                 "s": time.perf_counter() - t0}
             hist.append(h)
             if log is not None:
                 log(h)
-            if vl < best:
+            if np.isfinite(vl) and vl < best:
                 best, best_state = vl, copy.deepcopy(self.net.state_dict())
+        if best_state is None:                            # no finite val epoch: raise instead of a silent bad learner
+            raise RuntimeError("unroll fit: validation loss never finite")
         self.net.load_state_dict(best_state)
         self.net.eval()
         return hist
@@ -192,7 +259,9 @@ def run_meta_a(cost: FourDVarCost, x0_init: torch.Tensor, learner: LearnedOptimi
     xk = xs[:, -1]
     out = {"x0_iter": xs[:, :, :3].numpy(), "J_iter": j.numpy(), "cos_step_grad": cos.numpy(),
            "n_grad_evals": np.full(n, r["n_grad"], dtype=np.int64), "n_fwd_evals": np.zeros(n, dtype=np.int64),
-           "converged": torch.isfinite(j[:, -1]).numpy(), "x0_a": xk[:, :3].numpy(), "wall_s": wall}
+           "converged": torch.isfinite(j[:, -1]).numpy(), "x0_a": xk[:, :3].numpy(), "wall_s": wall,
+           # gradient evaluations spent to reach iterate m (one per move; J at iterates is reporting only)
+           "grad_cum": np.tile(np.arange(xs.shape[1]) * (1 if learner.cfg.use_grad else 0), (n, 1))}
     if cost.weak:
         out["eta_final"] = cost.unpack(xk)[1].numpy()
     return out

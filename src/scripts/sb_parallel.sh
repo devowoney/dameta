@@ -3,9 +3,7 @@
 #SBATCH --account=odyssey
 #SBATCH --qos=low
 #SBATCH --nodes=1
-#SBATCH --nodelist=sl-mee-br-205
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:a40:1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=96G
 #SBATCH --job-name=dameta
@@ -13,7 +11,9 @@
 # ----------------------------------------------------------------------------------------------------------------------
 # dameta: run the lines of a command-list file in parallel, ONE thread each (L63 tensors are tiny: per-op overhead,
 # not arithmetic, dominates, so threads only add contention). Lines run from the project root given as $2.
-# Usage:  sbatch [--job-name=x] [--cpus-per-task=N] src/scripts/sb_parallel.sh <cmd_list_file> <project_root> [n_par]
+# CPU ONLY (pilot 2026-11-20): never request a GPU (--gres) — the runs do not use it and it blocks other users.
+# Usage:  sbatch --nodelist=sl-mee-br-<N> [--job-name=x] [--cpus-per-task=N] src/scripts/sb_parallel.sh <cmd_list_file>
+#                <project_root> [n_par]
 #   n_par default = SLURM_CPUS_PER_TASK. Each line's stdout/stderr should be redirected inside the line itself.
 # ----------------------------------------------------------------------------------------------------------------------
 set -e

@@ -8,7 +8,7 @@ problem: bice                 # bice (initial condition) | bpe (joint [x0, sigma
 model: f1                     # estimation model: truth (E1 reference) | f1 (L63 rho 27.5) | emulator
 emulator: rho275              # used when model = emulator
 background: null              # lagged-ensemble background name; null = f1 for truth / f1, the emulator name for emulator
-method: adagrad               # gd | adagrad
+method: adagrad               # gd | adagrad | adam | lbfgs_wolfe (strong-Wolfe L-BFGS reference, lr = 1)
 lr: 0.1
 gradient: exact               # exact (adjoint) | fd (central FD, F1 forward only) | hybrid (J: F1, grad: emulator adjoint)
 fd_eps: 1.0e-6
@@ -16,6 +16,7 @@ surrogate_emulator: rho275    # gradient source for gradient=hybrid
 max_iter: 1000
 tol: 1.0e-6
 n_cases: null
+g1_iter: false                # ICE table: record per-iterate G1 (cos with the true-model gradient), reporting only
 
 f1:                           # knowledge numerical model (false physics F1) = BPE prior mean
   sigma: 10.0

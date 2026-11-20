@@ -1,0 +1,4 @@
+# ICE table gate job: new tests + regressions (plain-script tests, run from the project root by sb_parallel.sh)
+python src/tests/test_ice.py > tmp/logs/ice/gate_test_ice.log 2>&1
+python src/tests/test_cost_v2.py > tmp/logs/ice/gate_test_cost_v2.log 2>&1
+python src/tests/test_m2.py > tmp/logs/ice/gate_test_m2.log 2>&1

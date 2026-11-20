@@ -24,6 +24,11 @@ the best epoch is chosen on the median relative validation GRADIENT error (both 
                  n per case, plus a thinned hybrid trajectory (stride 10); no truth and no adjoint of F needed.
 Inference cost: one forward run of F per iteration (n_fwd_evals); no gradient evaluation. Diagnostics (not counted):
 cos(g^, exact grad of F's cost).
+
+method "lbfgs_wolfe" (2026-11-19, ICE table cell 4): g^ drives the strong-Wolfe L-BFGS reference instead of GD /
+Adagrad. The learned gradient is wrapped as a cost (learned_grad_cost) whose grad() = (J from ONE forward run, g^), so
+ReferenceStep's line search (batched first trial + per-case torch _strong_wolfe) runs unchanged on (J, g^). Cost =
+forward runs, line-search trials included (fwd_cum, as grad_cum of the exact-gradient runners).
 """
 
 import time
@@ -299,20 +304,39 @@ def build_lg(d: int, n_obs: int, cfg: LGConfig, ctrl_mean, ctrl_std, train_pairs
                            train_pairs["g"].std(0).clamp_min(1e-12))
 
 
+def learned_grad_cost(cost: FourDVarCost, learner) -> FourDVarCost:
+    """Same problem as `cost`, but grad(c) = (J, g^) from ONE forward run + the learned grad J_o (no adjoint).
+    A subclass of the cost's own class, so ReferenceStep can build per-case copies with the usual constructor; the
+    iteration index k of the learner (class attribute, set by the runner) is shared by those copies."""
+    class LearnedGradCost(type(cost)):
+        k = 0
+
+        def grad(self, c):
+            with torch.no_grad():
+                fwd = forward_run(self, c)
+                g = analytic_grad(self, c) + learner.grad_obs(c, LearnedGradCost.k, fwd, self.weak)
+            return fwd["J"], g
+    return LearnedGradCost(cost.step, cost.y, cost.mask, cost.x0_b, cost.cfg, weak=cost.weak, b_inv=cost.b_inv)
+
+
 def run_learned_gradient(cost: FourDVarCost, x0_init: torch.Tensor, learner, method: str, lr: float,
                          max_iter: int = 1000, tol: float = 1e-6, diag_exact: bool = True) -> dict:
     """Frozen inference; record compatible with run_fourdvar (+ n_fwd_evals, cos_ghat_grad)."""
     n = x0_init.shape[0]
     eta0 = torch.zeros(n, cost.cfg.n_obs - 1, 3, dtype=x0_init.dtype) if cost.weak else None
     c = cost.pack(x0_init, eta0).detach().clone()
-    teacher = ReferenceStep(c, method=method, lr=lr)
+    wolfe = method == "lbfgs_wolfe"
+    lg_cost = learned_grad_cost(cost, learner) if wolfe else None
+    teacher = ReferenceStep(c, method=method, lr=lr, cost=lg_cost)
     active, n_fwd = torch.ones(n, dtype=c.dtype), torch.zeros(n, dtype=torch.long)
+    outer, fwd_hist = torch.zeros(n, dtype=torch.long), [torch.zeros(n, dtype=torch.long)]   # forward runs to iterate k
     x0_hist, j_hist, cos_hist, cosg_hist = [c[:, :3].clone()], [], [], []
     t0, j_prev = time.perf_counter(), None
     for k in range(max_iter):
         fwd = forward_run(cost, c)
         j = fwd["J"]
         n_fwd += active.long()
+        outer += (active.bool() & ~teacher.is_free(c)).long()   # accepted line-search point: run already known
         j_hist.append(j.clone() if j_prev is None else torch.where(active.bool(), j, j_hist[-1]))
         if j_prev is not None:
             rel = (j_prev - j).abs() / j_prev.abs().clamp_min(1e-300)
@@ -320,7 +344,10 @@ def run_learned_gradient(cost: FourDVarCost, x0_init: torch.Tensor, learner, met
         if active.sum() == 0:
             break
         g_hat = analytic_grad(cost, c) + learner.grad_obs(c, k, fwd, cost.weak)
-        f = teacher(c, g_hat, active)
+        if wolfe:
+            lg_cost.__class__.k = k
+        f = teacher(c, g_hat, active, j=j)
+        fwd_hist.append(outer + teacher.n_ls)
         if diag_exact:                                          # diagnostics only, NOT counted
             g_ex = cost.grad(c)[1]
             cos_hist.append(torch.nn.functional.cosine_similarity(f, g_ex, dim=1))
@@ -339,6 +366,10 @@ def run_learned_gradient(cost: FourDVarCost, x0_init: torch.Tensor, learner, met
     j_iter = torch.stack(j_hist[: k_run + 1], 1)
     j_iter = torch.cat([j_iter, j_iter[:, -1:].expand(n, pad)], 1) if pad > 0 else j_iter
 
+    def _cum(h, length):                                       # [n, length + 1], padded with the last value
+        h = torch.stack(h, 1).numpy()
+        return np.concatenate([h, np.repeat(h[:, -1:], length + 1 - h.shape[1], 1)], 1)
+
     def _pad(h):
         h = torch.stack(h, 1) if h else torch.zeros(n, 0, dtype=c.dtype)
         return torch.cat([h, torch.full((n, max_iter - h.shape[1]), float("nan"), dtype=c.dtype)], 1).numpy()
@@ -346,7 +377,8 @@ def run_learned_gradient(cost: FourDVarCost, x0_init: torch.Tensor, learner, met
     out = {"x0_iter": x0_iter.numpy(), "J_iter": j_iter.numpy(), "cos_step_grad": _pad(cos_hist),
            "cos_ghat_grad": _pad(cosg_hist), "n_grad_evals": np.zeros(n, dtype=np.int64), "n_fwd_evals": n_fwd.numpy(),
            "converged": ((active == 0) & (n_fwd < max_iter) & torch.isfinite(j_final)).numpy(),
-           "x0_a": c[:, :3].numpy(), "wall_s": wall, "control_final": c.numpy()}
+           "x0_a": c[:, :3].numpy(), "wall_s": wall, "control_final": c.numpy(),
+           "fwd_cum": _cum(fwd_hist, max_iter)}
     if cost.weak:
         out["eta_final"] = cost.unpack(c)[1].numpy()
     return out
