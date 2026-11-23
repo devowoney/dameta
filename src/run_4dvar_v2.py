@@ -1,16 +1,18 @@
 """
 Hydra entry point: classical 4D-Var on D1 v2 (M5 blueprint) — model-error-isolated BICE / BPE.
 
-    model=truth    E1 reference (true model inside 4D-Var; SAME first guess and B as F1)
-    model=f1       knowledge numerical model (L63 with rho 27.5)            problem=bice | bpe
-    model=emulator false model F2 (emulator, default rho275)                problem=bice
-First guess = 0.5-TU member of the time-lagged ensemble of the estimation model's false model; B = hybrid
+Estimation model = one of the model rectangle (src/configs/models.yaml, branch m7-model-rectangle, 2026-11-20):
+    model=l1 (alias truth)   true L63 inside 4D-Var (perfect-model reference; first guess / B of `l1_background`)
+    model=f1 | f2            false L63, theta_L * (1 + eps d) (mild | strong)    problem=bice | bpe
+    model=e1 | e2            emulator trained on F1 | F2 trajectories            problem=bice
+    model=emulator           legacy v2 path: emulator file `emulator` (e.g. rho275)
+First guess = 0.5-TU member of the time-lagged ensemble of the estimation model itself; B = hybrid
 (alpha B_ens + (1 - alpha) s2 I, tmp/data/hybrid_B_seed<S>.json). Window / obs geometry from the D1 v2 file.
 
 Usage (project root, env oceanai):
     python src/run_4dvar_v2.py model=f1 method=adagrad lr=0.1
-    python src/run_4dvar_v2.py model=f1 problem=bpe
-    python src/run_4dvar_v2.py model=emulator split=test
+    python src/run_4dvar_v2.py model=f2 problem=bpe
+    python src/run_4dvar_v2.py model=e1 split=test
 
 Record (NetCDF, dims ic, k, kstep, lead, var[, ctrl_t, param]):
     x0_iter, J_iter, cos_step_grad, n_grad_evals, converged, diverged, x0_a, [eta_final], [theta_a (bpe)],
@@ -40,6 +42,7 @@ from dameta.da.gradients import FDGradient, HybridGradient  # noqa: E402
 from dameta.data.background import load_hybrid_background  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
+from dameta.dynamics.models import build_model, canonical, load_registry, model_params  # noqa: E402
 
 OmegaConf.register_new_resolver("project_root", lambda: str(Path(__file__).resolve().parent.parent), replace=True)
 OmegaConf.register_new_resolver("bpe_suffix", lambda p: "_bpe" if p == "bpe" else "", replace=True)
@@ -52,11 +55,26 @@ def truth_step(ds):
                               dt=ds.attrs["dt"])).step
 
 
+def registry(cfg):
+    """Model-rectangle registry (models.yaml) with optional top-level overrides, e.g. registry_overrides.eps1=0.01."""
+    return load_registry(**OmegaConf.to_container(cfg.get("registry_overrides", {}) or {}))
+
+
+def model_kind(cfg) -> str:
+    if cfg.model == "emulator":
+        return "emulator"
+    return str(registry(cfg).models[canonical(cfg.model, registry(cfg))].kind)
+
+
 def estimation_step(cfg, ds):
-    if cfg.model == "truth":
-        return truth_step(ds)
-    if cfg.model == "f1":
-        return L63Model(L63Params(sigma=cfg.f1.sigma, rho=cfg.f1.rho, beta=cfg.f1.beta, dt=ds.attrs["dt"])).step
+    if cfg.model != "emulator":
+        reg = registry(cfg)
+        step, desc, p = build_model(cfg.model, reg, cfg.emulator_dir)
+        if canonical(cfg.model, reg) == "l1":                      # registry L1 must be the data's truth model
+            assert (p.sigma, p.rho, p.beta, p.dt) == (ds.attrs["sigma"], ds.attrs["rho"], ds.attrs["beta"],
+                                                      ds.attrs["dt"]), "registry L1 != data truth"
+        log.info("estimation model %s", desc)
+        return step
     if cfg.model == "emulator":
         emu = L63Emulator.load(Path(cfg.emulator_dir) / f"{cfg.emulator}.pt")
         for p in emu.parameters():
@@ -69,7 +87,10 @@ def estimation_step(cfg, ds):
 def background_name(cfg):
     if cfg.background:
         return cfg.background
-    return cfg.emulator if cfg.model == "emulator" else "f1"
+    if cfg.model == "emulator":
+        return cfg.emulator
+    name = canonical(cfg.model, registry(cfg))
+    return cfg.get("l1_background", "f1") if name == "l1" else name
 
 
 def rmse(a, b):
@@ -80,7 +101,8 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     """D1 v2 data, lagged hybrid background and the (exact-gradient) cost of `split` — shared with the meta runner."""
     torch.set_default_dtype(torch.float64)
     assert cfg.problem in ("bice", "bpe")
-    assert cfg.problem == "bice" or (cfg.model == "f1" and cfg.constraint == "strong"), "BPE: model f1, strong only"
+    assert cfg.problem == "bice" or (model_kind(cfg) == "l63" and cfg.constraint == "strong"), \
+        "BPE: L63-kind model (l1 / f1 / f2), strong constraint only"
     # feature flag `data_prefix` (2026-11-16): l63v2 = D1 v2 (obs every 10 steps); l63v2d = dense obs (every step,
     # src/make_dense_obs.py). The background (first guess, B) is the D1 v2 one in both cases.
     ds = xr.load_dataset(Path(cfg.data_dir) / f"{cfg.get('data_prefix', 'l63v2')}_{split}_seed{cfg.seed}.nc")
@@ -94,7 +116,8 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     mask = torch.tensor(ds.obs_mask.sel(pattern=cfg.pattern).values)
     weak = cfg.constraint == "weak"
     if cfg.problem == "bpe":
-        theta_b = torch.tensor([cfg.f1.sigma, cfg.f1.rho, cfg.f1.beta])
+        p = model_params(cfg.model, registry(cfg))                 # parameter prior = the model's own theta
+        theta_b = torch.tensor([p.sigma, p.rho, p.beta])
         cost = ParamFourDVarCost(y, mask, x0_b, ccfg, theta_b, cfg.bpe_prior_rel_std * theta_b, ds.attrs["dt"], b_inv)
     else:
         cost = FourDVarCost(estimation_step(cfg, ds), y, mask, x0_b, ccfg, weak=weak, b_inv=b_inv)
@@ -129,7 +152,7 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
     if cfg.problem == "bpe":
         theta_a = torch.where(finite[:, None], c_fin[:, 3:6], base.theta_b.expand(len(x0_a), 3))
         step_est = lambda x: base.step_theta(x, theta_a)                       # noqa: E731
-        step_b = L63Model(L63Params(sigma=cfg.f1.sigma, rho=cfg.f1.rho, beta=cfg.f1.beta, dt=ds.attrs["dt"])).step
+        step_b = L63Model(model_params(cfg.model, registry(cfg))).step         # prior theta = the model's own
     else:
         step_est = step_b = base.step
     with torch.no_grad():
@@ -213,7 +236,7 @@ def run(cfg: DictConfig) -> xr.Dataset:
     base, cost = P["cost"], P["cost"]
     if cfg.gradient != "exact":
         # adjoint-free baselines (cell-8 claim): F1 forward runs only for J
-        assert cfg.problem == "bice" and cfg.model == "f1", "fd / hybrid gradients: model f1, problem bice"
+        assert cfg.problem == "bice" and model_kind(cfg) == "l63", "fd / hybrid gradients: L63-kind model, bice"
         if cfg.gradient == "fd":
             cost = FDGradient(base, float(cfg.fd_eps))
         elif cfg.gradient == "hybrid":

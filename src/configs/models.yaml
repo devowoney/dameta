@@ -1,0 +1,24 @@
+# Model rectangle (pilot 2026-11-20; branch m7-model-rectangle) — single source of truth for the 5 dynamical models.
+#
+#        F1 ──(emulator approximation, Problem 2)──▶ E1          L1 = truth (observations, evaluation, reference)
+#        │ (physical misspecification, Problem 1)    │
+#        F2 ──(emulator approximation, Problem 2)──▶ E2
+#
+# False models: theta_F = theta_L * (1 + eps * d), d = direction / ||direction|| (relative, element-wise), so that F1
+# and F2 lie on ONE line in parameter space and differ only by the size eps. eps1 / eps2 are fixed by the
+# pre-registered screen (src/screen_teachers.py --sweep): F1 one-obs-interval model error ~ 0.15 sigma_o, F2 ~ sigma_o.
+
+theta_L: {sigma: 10.0, rho: 28.0, beta: 2.6666666666666665}
+dt: 0.01
+direction: [1.0, 1.0, 1.0]     # relative direction in (sigma, rho, beta); upward keeps rho away from the chaos threshold
+eps1: 0.03                     # F1 (mild):   screen pick, m 0.155 sigma_o (pilot-accepted rule, 2026-11-20)
+eps2: 0.18                     # F2 (strong): screen pick, m 0.958 sigma_o (extended grid, 2026-11-20)
+
+models:
+  l1: {kind: l63, eps: 0.0}
+  f1: {kind: l63, eps: "${eps1}"}
+  f2: {kind: l63, eps: "${eps2}"}
+  e1: {kind: emulator, file: e1_d10w8d1, teacher: f1}   # degraded: 10 train ICs, MLP 1 x 8 (m_h 0.142; pilot 2026-11-23)
+  e2: {kind: emulator, file: e2_d10w8d1, teacher: f2}   # same setting (m_h 0.126); well-trained e1.pt / e2.pt kept
+
+aliases: {truth: l1}           # v2 name kept for backward compatibility

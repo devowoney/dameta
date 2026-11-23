@@ -37,7 +37,7 @@ def chi2(e, b):
     return np.einsum("ni,nij,nj->n", e, np.linalg.inv(b), e)
 
 
-def main(names=("f1", "rho275"), seed=42):
+def main(names=("f1", "f2", "e1", "e2"), seed=42):
     out = {}
     for name in names:
         ds = xr.load_dataset(D / f"l63v2_val_seed{seed}.nc")
@@ -63,4 +63,4 @@ def main(names=("f1", "rho275"), seed=42):
 
 
 if __name__ == "__main__":
-    main(tuple(sys.argv[1:]) or ("f1", "rho275"))
+    main(tuple(sys.argv[1:]) or ("f1", "f2", "e1", "e2"))   # model rectangle (m7); legacy: f1 rho275

@@ -4,6 +4,7 @@ Hydra entry point: train the M2 emulator and save it to tmp/emulators/<name>.pt.
 Usage (project root, env oceanai):
     python src/train_emulator.py                                   # clean emulator (exact L63 teacher)
     python src/train_emulator.py name=rho26 teacher.rho=26         # deliberately degraded teacher (example)
+    python src/train_emulator.py name=e1 +registry_model=f1 train.steps=10000   # model rectangle E1 (teacher F1)
 """
 
 import logging
@@ -30,9 +31,16 @@ def main(cfg: DictConfig) -> None:
     torch.set_num_threads(2)
     data = Path(cfg.data_dir)
     tr = xr.open_dataset(data / f"l63_train_seed{cfg.seed}.nc")
+    if cfg.get("n_train_ic"):                          # feature flag (m7): degraded emulator = fewer training ICs
+        tr = tr.isel(ic=slice(0, int(cfg.n_train_ic)))
+        log.info("training on the first %d train ICs", tr.sizes["ic"])
     va = xr.open_dataset(data / f"l63_val_seed{cfg.seed}.nc")
     n_steps = tr.sizes["t"] - 1                                         # same trajectory length as D1 (L + F)
     teacher = TeacherConfig(**cfg.teacher)
+    if cfg.get("registry_model"):                      # model rectangle (m7): teacher = registry model (models.yaml)
+        from dameta.dynamics.models import load_registry, teacher_config
+        teacher = teacher_config(cfg.registry_model, load_registry())
+        log.info("teacher from registry model %s: %s", cfg.registry_model, teacher)
     emu, record = train_emulator(torch.tensor(tr.x_true.values[:, 0]), torch.tensor(va.x_true.values[:, 0]), n_steps,
                                  teacher, EmulatorConfig(**cfg.emulator), TrainConfig(**cfg.train), log=log.info)
     record["config"] = OmegaConf.to_container(cfg, resolve=True)

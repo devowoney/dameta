@@ -5,23 +5,22 @@ split: val                    # val (lr tuning) | test | test_ood   (never tune 
 pattern: full                 # full | x_only
 constraint: strong            # strong | weak   (bpe: strong only)
 problem: bice                 # bice (initial condition) | bpe (joint [x0, sigma, rho, beta]; model f1 only)
-model: f1                     # estimation model: truth (E1 reference) | f1 (L63 rho 27.5) | emulator
-emulator: rho275              # used when model = emulator
-background: null              # lagged-ensemble background name; null = f1 for truth / f1, the emulator name for emulator
+model: f1                     # estimation model (src/configs/models.yaml): l1 (alias truth) | f1 | f2 | e1 | e2
+                              # | emulator (legacy v2 path, file `emulator`)
+emulator: rho275              # used only when model = emulator (legacy)
+background: null              # lagged-ensemble background name; null = the model's own (l1: `l1_background`)
+l1_background: f1             # first guess / B used by the L1 perfect-model reference (same as F1, v2 convention)
+registry_overrides: {}        # top-level overrides of models.yaml, e.g. {eps1: 0.01, eps2: 0.05}
 method: adagrad               # gd | adagrad | adam | lbfgs_wolfe (strong-Wolfe L-BFGS reference, lr = 1)
 lr: 0.1
-gradient: exact               # exact (adjoint) | fd (central FD, F1 forward only) | hybrid (J: F1, grad: emulator adjoint)
+gradient: exact               # exact (adjoint) | fd (central FD, forward only) | hybrid (J: L63 model, grad: emulator adjoint)
 fd_eps: 1.0e-6
-surrogate_emulator: rho275    # gradient source for gradient=hybrid
+surrogate_emulator: e1        # gradient source for gradient=hybrid (emulator file name)
 max_iter: 1000
 tol: 1.0e-6
 n_cases: null
 g1_iter: false                # ICE table: record per-iterate G1 (cos with the true-model gradient), reporting only
 
-f1:                           # knowledge numerical model (false physics F1) = BPE prior mean
-  sigma: 10.0
-  rho: 27.5
-  beta: 2.6666666666666665
 bpe_prior_rel_std: 0.1        # parameter prior std = 10 % of each prior value
 
 cost:                         # window / obs geometry are read from the D1 v2 file; B = hybrid (tmp/data/hybrid_B_*.json)

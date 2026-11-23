@@ -30,9 +30,10 @@ background:                    # time-lagged ensemble of each FALSE model
   lags: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]   # steps (0.1 .. 1.0 TU)
   tau_b: 50                    # first guess = the 0.5-TU member (pilot 2026-11-14)
   floor: 0.01                  # B += floor * tr(B)/3 * I
-  false_models:                # name -> definition
-    f1: {kind: l63, sigma: 10.0, rho: 27.5, beta: 2.6666666666666665}
-    rho275: {kind: emulator, file: rho275}
+  registry_models: [f1, f2, e1, e2]   # model rectangle (src/configs/models.yaml); L1 reuses f1's background
+  false_models: {}             # legacy explicit definitions (v2: f1 = L63 rho 27.5, rho275 emulator), name -> spec
+
+backgrounds_only: false        # true: reuse tmp/data/l63v2_<split>_seed<S>.nc, write backgrounds only
 
 emulator_dir: ${project_root:}/tmp/emulators
 out_dir: ${project_root:}/tmp/data
