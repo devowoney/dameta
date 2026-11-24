@@ -75,20 +75,160 @@
      % Do not put more abstract text body here!
 \end{abstract}
 
-\section{Before start}
+%================================================================================
+\section{Introduction}  % Or first section name if you have not introduction.
 
-\section{Section Name}  % Or first section name if you have not introduction.
+Variational Data Assimilation and Model error.
+
+Machine-Learning-Based Emulators in Data Assimilation.
+
+Learned Optimizer and Meta-Learning
+
+Scientific Gap to research Question
+
+%================================================================================
+
+%================================================================================
+\section{Method}  % Or first section name if you have not introduction.
 
 Section text.
 
+\subsection{Model Hierarchy \& Configuration}
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure1_testbed.png}
+    \caption{Lorenz-63 testbed.}
+    \label{fig:figure1}
+\end{figure}
+Subsection text.
 
-\subsection{Subsection Name}
+\subsection{Meta-Learned Optimization Framework}
 
 Subsection text.
 
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure2_scheme.png}
+    \caption{End-to-End learned optimization framework}
+    \label{fig:figure2}
+\end{figure}
+
+\subsubsection{Meta-Training}
+
+Subsubsection text.
+
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure3_training.png}
+    \caption{Meta-learner training strategy}
+    \label{fig:figure3}
+\end{figure}
+
+\subsection{Experiment Design}
+
+\subsection{Evaluation Metrics}
+%================================================================================
+
+%================================================================================
+\section{Results}  % Or first section name if you have not introduction.
+
+Section text.
+
+\subsection{Model Error Alters 4D-Var Optimization}
+
+Subsection text.
+
+\subsection{Learned Optimization improves IC Estimation}
+
+Subsection text.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure4_geometry.png}
+    \caption{Model-error-enduced 4D-Var optimization modification and meta learning solution (a) ageometry, (b) and (c)}
+    \label{fig:figure4}
+\end{figure}
+
+\begin{table}
+\caption{Optimization summary}
+\centering
+\begin{tabular}{l c c c c c c c}
+    \hline
+        Model  & Opitmizer & $cos \theta$ & $\kappa(H)$ & Curvature Distortion & IC Error & Final J & Computational cost \\
+   \hline
+      $l1$  & 260   \\
+      $l2$  & 300   \\
+      $l3$  & 340   \\
+    \hline
+\end{tabular}
+\tablenotetext{a}{Table footnote text here.}  %xxx ditto    %xxxx table footnote, not just footnote
+\label{tab:table1}
+\end{table}
+
+\subsection{Improvement in I.C. translate into Better Forecasts}
+
+Subsection text.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure5_forecast.png}
+    \caption{Optimized IC impacts on subsequent forecast}
+    \label{fig:figure5}
+\end{figure}
+
+\subsection{How Much of Model Error is Recoverable?}
+
+Subsection text.
+\begin{table}
+\caption{Mismatched model optimization test}
+\centering
+\begin{tabular}{l c c c c c c}
+    \hline
+        Experiment & 4D-Var model & mismatched model & IC Error & Forecast error & Gap recovery & note \\
+   \hline
+      $l1$  & 260   \\
+      $l2$  & 300   \\
+      $l3$  & 340   \\
+    \hline
+\end{tabular}
+\tablenotetext{a}{Table footnote text here.}  %xxx ditto    %xxxx table footnote, not just footnote
+\label{tab:table2}
+\end{table}
+
+\begin{table}
+\caption{Recoverable model error}
+\centering
+\begin{tabular}{l c c c c c c}
+    \hline
+        Error amplitude & L-BFGS IC error & Meta IC error & Gap recovered & Forecast gain & note \\
+   \hline
+      $l1$  & 260   \\
+      $l2$  & 300   \\
+      $l3$  & 340   \\
+    \hline
+\end{tabular}
+\tablenotetext{a}{Table footnote text here.}  %xxx ditto    %xxxx table footnote, not just footnote
+\label{tab:table3}
+\end{table}
+
+\subsection{Robustness Across Cases and Failure Modes}
+
+Subsection text.
+\begin{figure}[ht]
+    \centering
+    \includegraphics[width=0.7\columnwidth]{supports/figure6_robustness.png}
+    \caption{Generalization (a) Non-seen (b) error distribution and (c) GLONet}
+    \label{fig:figure6}
+\end{figure}
 
 \subsubsection{Subsubsection Name}
 
+Subsubsection text.
+%================================================================================
+
+%================================================================================
+\section{Conclusion}  % Or first section name if you have not introduction.
+
+Section text.
+%================================================================================
 
 \paragraph{Paragraph Name}
 Paragraph text.
