@@ -76,6 +76,16 @@ tmp/logs/train_e*.log.
 - Error: member − own control, over 0 to 5 TU of lead time.
 - Decorrelation ρ(t) = 1 − |d|² / (2 Σ σ²_clim), with σ²_clim from L1 (D1 v2 train). Decorrelation time = first
   lead with ρ < 0.5.
+- Definition of the two decorrelation measures (src/fig_models.py docstring):
+  - distance-based ρ(t), one value per run. For two states a, b of the same climate (variance σ_v²),
+    E|a − b|² = Σ_v (Var a_v + Var b_v − 2 Cov_v) = 2 Σ_v σ_v² (1 − ρ), with ρ = Σ_v Cov_v / Σ_v σ_v²
+    (variance-weighted correlation). One run's |d|² replaces the expectation: ρ = 1 identical, ρ = 0 independent
+    states (saturation), ρ < 0 possible (member and control on opposite wings); ρ = 0.5 ⇔ RMS error =
+    saturation / √2. σ_v² = L1 climatological variance for every model (common yardstick).
+  - Pearson ρ_P(t) across runs (windows study only; in the fixed study the control is a single state):
+    ρ_P = Σ_v Cov_n(member_v, control_v) / √(Σ_v Var_n member_v · Σ_v Var_n control_v), each model's own
+    variances, in [−1, 1]; 95 % CI by bootstrap over windows (members of a window kept together);
+    T_dec,P = first lead with ρ_P < 0.5.
 - The same noise draws are used for all models.
 - Study 1: 100 windows (test cases 0–99), one run each. Study 2: fixed window (test case 0), 100 runs.
 - Figures: tmp/figs/ens_{windows,fixed}_{growth,decorr,summary,dist}.{png,pdf}; arrays:

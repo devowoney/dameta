@@ -1,4 +1,5 @@
-# D1 v2 — truth + observations (window = Lyapunov time of the false model) and time-lagged false-model backgrounds.
+# D1 v2 — truth + observations and time-lagged false-model backgrounds. Window 0.6 TU = Pearson decorrelation time of
+# the model rectangle (src/fig_models.py, pilot 2026-11-24); the 1.1-TU data are kept in tmp/data/w110/.
 # Design: memory/branches/m5-meta-grid/blueprint.md (pilot 2026-11-14).
 seed: 42
 
@@ -9,9 +10,9 @@ l63:                           # TRUTH model
   dt: 0.01
 
 data:
-  window: 110                  # 1.1 TU (Lyapunov time of F1, common to F1 / F2)
+  window: 60                   # 0.6 TU (Pearson decorrelation time, pilot 2026-11-24; was 110 = 1.1 TU)
   forecast: 500
-  obs_every: 10                # 12 obs times
+  obs_every: 10                # 7 obs times (t = 0, 10, ..., 60)
   sigma_o2: 2.0
   history: 100                 # truth stored 1 TU before t0 (max lag)
   spinup: 1000
