@@ -1,0 +1,2 @@
+python src/gen_data_v2.py data.window=100 out_dir=${PWD}/tmp/data_w100 > tmp/logs/m8/gen_data_w100.log 2>&1 && python src/tune_hybrid_b.py --data-dir tmp/data_w100 > tmp/logs/m8/tune_hybrid_b_w100.log 2>&1
+python src/gen_data_v2.py data.window=160 out_dir=${PWD}/tmp/data_w160 > tmp/logs/m8/gen_data_w160.log 2>&1 && python src/tune_hybrid_b.py --data-dir tmp/data_w160 > tmp/logs/m8/tune_hybrid_b_w160.log 2>&1

@@ -1,0 +1,1 @@
+python src/gen_data_v2.py > tmp/logs/m8/gen_data_v3.log 2>&1 && python src/tune_hybrid_b.py > tmp/logs/m8/tune_hybrid_b_v3.log 2>&1

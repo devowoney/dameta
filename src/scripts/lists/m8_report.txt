@@ -1,1 +1,0 @@
-python src/report_classic_4dv.py report > tmp/logs/m8/report.log 2>&1

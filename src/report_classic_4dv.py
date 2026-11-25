@@ -4,6 +4,8 @@ M8 report (branch m8-classic-4dv): classical 4D-Var on the model rectangle F1, F
     python src/report_classic_4dv.py select     val lr sweep tmp/results/m8/sweep/<model>/*.nc -> selected_lr.json,
                                                 lr_sweep.md (pre-registered rule of src/select_lr.py, per model);
                                                 lists the groups whose pick sits on a grid edge (-> extend the grid)
+    python src/report_classic_4dv.py binfl      val smoke tmp/results/m8/binfl/b<infl>/<model>/*.nc (L-BFGS) ->
+                                                binfl.md (choice of cost.b_infl, the weaker background term)
     python src/report_classic_4dv.py report     test runs tmp/results/m8/test/<model>/*.nc -> classic_4dv.{md,csv},
                                                 figures tmp/figs/m8_*.{png,pdf}
 
@@ -195,12 +197,23 @@ def figures(runs, plt):
         plt.close(fig)
 
 
+def setup_line() -> str:
+    """Experiment geometry read from the data / result files (2026-11-25: no longer hard-coded)."""
+    d = xr.open_dataset(ROOT / "tmp/data/l63v2_test_seed42.nc").attrs
+    bg = xr.open_dataset(ROOT / "tmp/data/l63v2_test_seed42_bg_f1.nc").attrs
+    first = next(iter(sorted((RES / "test").glob("*/*.nc"))), None)
+    infl = float(xr.open_dataset(first).attrs.get("b_infl", 1.0)) if first else 1.0
+    return (f"Window {d['window'] * d['dt']:.1f} TU ({d['window']} steps, obs every {d['obs_every']}), "
+            f"σ_o² = {d['sigma_o2']:g}, first guess = {bg['tau_b']}-step forecast valid at t0 − "
+            f"{bg.get('time_shift', 0)} steps, B = {infl:g} × hybrid B; forecast 5 TU;")
+
+
 def cmd_report():
     runs = collect()
     md, csv = table(runs)
     hdr = ["# M8 classical 4D-Var on the model rectangle (test, mean ± std over cases)", "",
-           "Window 0.6 TU (60 steps, obs every 10), forecast 5 TU; L1 = truth (metrics only); "
-           "`a` = at the analysis; κ_H over positive-definite cases only.", ""]
+           setup_line() + " L1 = truth (metrics only); `a` = at the analysis; κ_H over positive-definite cases "
+           "only.", ""]
     (RES / "classic_4dv.md").write_text("\n".join(hdr + md) + "\n")
     (RES / "classic_4dv.csv").write_text("\n".join(csv) + "\n")
     (ROOT / "tmp/figs").mkdir(parents=True, exist_ok=True)
@@ -208,5 +221,58 @@ def cmd_report():
     print(f"{len(runs)} runs -> {RES / 'classic_4dv.md'}, tmp/figs/m8_*")
 
 
+def cmd_binfl():
+    head = ["B infl", "model", "scheme", "obs", "n", "diverged", "grad evals", "|x0_b - x_true|", "sol_deg",
+            "traj_deg", "lam_min a", "kappa_H a (PD)", "non-PD frac", "n_neg a"]
+    md = ["# M8 weaker-background smoke (val, L-BFGS, mean ± std over cases)", "",
+          setup_line().replace("B = 1 × hybrid B", "B = (B infl) × hybrid B"), "",
+          "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for d in sorted((RES / "binfl").glob("b*"), key=lambda q: float(q.name[1:])):
+        for m in MODELS:
+            for c in CONSTRAINTS:
+                for p in PATTERNS:
+                    f = d / m / f"bice_{c}_{p}_lbfgs_wolfe_lr1_val.nc"
+                    if not f.exists():
+                        continue
+                    ds, _ = load(f)
+                    pd = ds.lam_min_a.values > 0
+                    md.append("| " + " | ".join([d.name[1:], NAMES[m], c, p, str(ds.sizes["ic"]),
+                                                 str(int(ds.diverged.sum())), ms(ds.n_grad_evals.values, "{:.0f}"),
+                                                 ms(np.sqrt(3) * ds.rmse_x0_b.values), ms(ds.sol_deg.values),
+                                                 ms(ds.traj_deg.values), ms(ds.lam_min_a.values, "{:.3g}"),
+                                                 ms(ds.kappa_H_a.values, "{:.3g}"), f"{1 - pd.mean():.2f}",
+                                                 ms(ds.n_neg_a.values, "{:.2f}")]) + " |")
+    (RES / "binfl.md").write_text("\n".join(md) + "\n")
+    print(f"-> {RES / 'binfl.md'}")
+
+
+def cmd_feas():
+    """10-case feasibility smoke (window x model x scheme x obs x optimizer, b_infl 4): runs complete? + geometry."""
+    head = ["window", "model", "scheme", "obs", "optimizer", "lr", "n", "diverged", "grad evals", "wall s",
+            "|x0_b - x_true|", "sol_deg", "traj_deg", "lam_min a", "non-PD frac a", "non-PD frac iterates"]
+    md = ["# M8 feasibility smoke (val, 10 cases, B = 4 × hybrid B, mean ± std over cases)", "",
+          "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for d in sorted((RES / "feas").glob("w*"), key=lambda q: int(q.name[1:])):
+        for m in MODELS:
+            for c in CONSTRAINTS:
+                for p in PATTERNS:
+                    for meth in METHODS:
+                        fs = sorted((d / m).glob(f"bice_{c}_{p}_{meth}_lr*_val.nc"))
+                        if not fs:
+                            md.append(f"| {d.name[1:]} | {NAMES[m]} | {c} | {p} | {MNAME[meth]} | MISSING |")
+                            continue
+                        ds, cfg = load(fs[0])
+                        it = ds.lam_min.values
+                        md.append("| " + " | ".join([
+                            d.name[1:], NAMES[m], c, p, MNAME[meth], f"{cfg['lr']:g}", str(ds.sizes["ic"]),
+                            str(int(ds.diverged.sum())), ms(ds.n_grad_evals.values, "{:.0f}"),
+                            f"{float(ds.attrs['wall_s']):.1f}", ms(np.sqrt(3) * ds.rmse_x0_b.values),
+                            ms(ds.sol_deg.values), ms(ds.traj_deg.values), ms(ds.lam_min_a.values, "{:.3g}"),
+                            f"{(ds.lam_min_a.values <= 0).mean():.2f}",
+                            f"{(it[np.isfinite(it)] <= 0).mean():.2f}"]) + " |")
+    (RES / "feas.md").write_text("\n".join(md) + "\n")
+    print(f"-> {RES / 'feas.md'}")
+
+
 if __name__ == "__main__":
-    {"select": cmd_select, "report": cmd_report}[sys.argv[1]]()
+    {"select": cmd_select, "report": cmd_report, "binfl": cmd_binfl, "feas": cmd_feas}[sys.argv[1]]()

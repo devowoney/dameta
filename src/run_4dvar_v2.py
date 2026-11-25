@@ -114,11 +114,17 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     # src/make_dense_obs.py). The background (first guess, B) is the D1 v2 one in both cases.
     ds = xr.load_dataset(Path(cfg.data_dir) / f"{cfg.get('data_prefix', 'l63v2')}_{split}_seed{cfg.seed}.nc")
     x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
+    # weaker background term (pilot 2026-11-25, flag cost.b_infl): J_b uses b_infl * B_hybrid, so that J_b convexifies
+    # J less and the model-dependent J_o shapes the geometry (1.0 = tuned hybrid B, earlier behaviour)
+    infl = float(cfg.cost.get("b_infl", 1.0))
+    b_h, b_inv = infl * b_h, b_inv / infl
+    ab = {**ab, "b_infl": infl}
     if n_cases is not None:
         n = int(n_cases)
         ds, x0_b, b_h, b_inv = ds.isel(ic=slice(0, n)), x0_b[:n], b_h[:n], b_inv[:n]
     ccfg = CostConfig(window=int(ds.attrs["window"]), obs_every=int(ds.attrs["obs_every"]),
-                      sigma_o2=float(cfg.cost.sigma_o2), sigma_q=float(cfg.cost.sigma_q))
+                      sigma_o2=float(ds.attrs["sigma_o2"] if cfg.cost.sigma_o2 is None else cfg.cost.sigma_o2),
+                      sigma_q=float(cfg.cost.sigma_q))
     y = torch.tensor(ds.y_obs.values)
     mask = torch.tensor(ds.obs_mask.sel(pattern=cfg.pattern).values)
     weak = cfg.constraint == "weak"
@@ -194,7 +200,8 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
         attrs={"config": json.dumps(OmegaConf.to_container(cfg, resolve=True)), "wall_s": res["wall_s"],
                "dameta_version": __version__, "torch_version": torch.__version__, "dataset": "D1v2",
                "configuration": configuration, "background": background_name(cfg),
-               "hybrid_alpha": P["ab"]["alpha"], "hybrid_s2": P["ab"]["s2"]},
+               "hybrid_alpha": P["ab"]["alpha"], "hybrid_s2": P["ab"]["s2"], "b_infl": P["ab"]["b_infl"],
+               "sigma_o2": ccfg.sigma_o2, "obs_every": ccfg.obs_every},
     )
     if weak:
         out["eta_final"] = (("ic", "ctrl_t", "var"), res["eta_final"])

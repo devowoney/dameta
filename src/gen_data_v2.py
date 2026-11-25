@@ -69,7 +69,7 @@ def main(cfg: DictConfig) -> None:
         for name, make in models.items():
             step, desc = make()
             bg = lagged_background(ds, step, name, cfg.background.lags, cfg.background.tau_b, cfg.background.floor,
-                                   desc)
+                                   desc, int(cfg.background.get("time_shift", 0)))
             bpath = out / f"l63v2_{split}_seed{cfg.seed}_bg_{name}.nc"
             bg.to_netcdf(bpath)
             err = np.sqrt(((bg.x0_b.values - ds.x_true.values[:, 0]) ** 2).mean(-1))

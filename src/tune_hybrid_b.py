@@ -23,7 +23,7 @@ import xarray as xr
 ROOT = Path(__file__).resolve().parent.parent
 D = ROOT / "tmp/data"
 ALPHAS = np.round(np.arange(0.0, 1.0001, 0.05), 2)
-S2 = np.exp(np.linspace(np.log(1e-3), np.log(10.0), 81))
+S2 = np.exp(np.linspace(np.log(1e-3), np.log(1e3), 121))   # 0.05-decade step; upper edge 10 -> 1e3 (2026-11-25: s2 hit 10)
 
 
 def hybrid(b_ens, alpha, s2):
@@ -69,5 +69,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("models", nargs="*", default=["f1", "f2", "e1", "e2"])   # model rectangle (m7); legacy: rho275
     ap.add_argument("--tune-split", default="train", choices=["train", "val"])
+    ap.add_argument("--data-dir", default=None, help="data directory (default tmp/data), e.g. tmp/data_w100")
     a = ap.parse_args()
+    if a.data_dir:
+        D = (ROOT / a.data_dir).resolve()
     main(tuple(a.models), tune_split=a.tune_split)

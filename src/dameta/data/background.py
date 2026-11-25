@@ -2,7 +2,10 @@
 Time-lagged false-model backgrounds for D1 v2 (memory/branches/m5-meta-grid/blueprint.md section 3).
 
 For every case and every lag tau_j (steps), the FALSE model is run from the true state at t0 - tau_j up to t0:
-    member_j = M_F^(tau_j) ( x_true(t0 - tau_j) ),        tau_j in `lags` (default 10, 20, ..., 100 steps)
+    member_j = M_F^(tau_j) ( x_true(t0 - s - tau_j) ),    tau_j in `lags` (default 10, 20, ..., 100 steps)
+    s        = time_shift (steps): the members are valid at t0 - s but used as states at t0, so the first guess carries
+               the model error of a short forecast AND a timing (temporal misrepresentation) error (pilot 2026-11-25;
+               s = 0 reproduces the earlier background)
     x0_b     = member at lag tau_b (default 50 steps = 0.5 TU)  — ONE balanced false-model state, never the mean
     B        = sample covariance of the members (N - 1) + floor * tr(B) / 3 * I     (case-specific, flow-dependent)
 The first guess and B therefore carry the false model's own dynamics and model error; the truth never enters x0_b
@@ -19,14 +22,15 @@ import xarray as xr
 
 @torch.no_grad()
 def lagged_background(ds: xr.Dataset, step: Callable, name: str, lags: Iterable[int] = range(10, 101, 10),
-                      tau_b: int = 50, floor: float = 0.01, model_desc: str = "") -> xr.Dataset:
+                      tau_b: int = 50, floor: float = 0.01, model_desc: str = "",
+                      time_shift: int = 0) -> xr.Dataset:
     lags = list(lags)
     assert tau_b in lags, "the first guess must be one of the lagged members"
-    assert max(lags) <= int(ds.lag.max()), "lag beyond the stored truth history"
+    assert max(lags) + time_shift <= int(ds.lag.max()), "lag beyond the stored truth history"
     past = torch.tensor(ds.x_true_past.values)                      # [n, history + 1, 3], lag 0 = t0
     members = []
     for tau in lags:
-        x = past[:, tau]
+        x = past[:, tau + time_shift]
         for _ in range(tau):
             x = step(x)
         members.append(x)
@@ -41,6 +45,7 @@ def lagged_background(ds: xr.Dataset, step: Callable, name: str, lags: Iterable[
                    "members": (("ic", "member", "var"), mem.numpy()), "lag_steps": (("member",), np.array(lags))},
         coords={"ic": ds.ic.values, "var": ["x", "y", "z"], "var2": ["x", "y", "z"], "member": np.arange(len(lags))},
         attrs={"false_model": name, "false_model_desc": model_desc, "tau_b": int(tau_b), "floor": float(floor),
+               "time_shift": int(time_shift),
                "split": ds.attrs["split"], "seed": int(ds.attrs["seed"]), "dataset": "D1v2-background"},
     )
 

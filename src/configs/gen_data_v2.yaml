@@ -12,9 +12,9 @@ l63:                           # TRUTH model
 data:
   window: 60                   # 0.6 TU (Pearson decorrelation time, pilot 2026-11-24; was 110 = 1.1 TU)
   forecast: 500
-  obs_every: 10                # 7 obs times (t = 0, 10, ..., 60)
-  sigma_o2: 2.0
-  history: 100                 # truth stored 1 TU before t0 (max lag)
+  obs_every: 20                # 4 obs times (t = 0, 20, 40, 60); pilot 2026-11-25 (was 10): harder, sparser problem
+  sigma_o2: 4.0                # pilot 2026-11-25 (was 2.0)
+  history: 105                 # truth stored before t0 (max lag 100 + time_shift 5)
   spinup: 1000
   ic_init_std: 10.0
   heldout_region: true
@@ -30,6 +30,7 @@ n_ic:
 background:                    # time-lagged ensemble of each FALSE model
   lags: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]   # steps (0.1 .. 1.0 TU)
   tau_b: 50                    # first guess = the 0.5-TU member (pilot 2026-11-14)
+  time_shift: 5                # members valid at t0 - 5 steps, used as states at t0 (timing error; pilot 2026-11-25)
   floor: 0.01                  # B += floor * tr(B)/3 * I
   registry_models: [f1, f2, e1, e2]   # model rectangle (src/configs/models.yaml); L1 reuses f1's background
   false_models: {}             # legacy explicit definitions (v2: f1 = L63 rho 27.5, rho275 emulator), name -> spec

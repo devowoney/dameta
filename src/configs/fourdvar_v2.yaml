@@ -26,7 +26,8 @@ hess_every: 1                 # M8: Hessian every n iterations (1 = every iterat
 bpe_prior_rel_std: 0.1        # parameter prior std = 10 % of each prior value
 
 cost:                         # window / obs geometry are read from the D1 v2 file; B = hybrid (tmp/data/hybrid_B_*.json)
-  sigma_o2: 2.0
+  sigma_o2: null              # null = the data's sigma_o2 (D1 v2 attrs; 4.0 since 2026-11-25, was 2.0)
+  b_infl: 4.0                 # weaker background (pilot 2026-11-25): B = b_infl * B_hybrid in J_b (1 = tuned hybrid)
   sigma_q: 0.1
 forecast: 500
 

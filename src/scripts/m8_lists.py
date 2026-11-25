@@ -4,6 +4,8 @@ M8 command lists (branch m8-classic-4dv): classical 4D-Var on the model rectangl
     python src/scripts/m8_lists.py smoke                 -> src/scripts/lists/m8_smoke.txt
     python src/scripts/m8_lists.py sweep  [n_jobs]       -> src/scripts/lists/m8_sweep_<j>.txt   (val, lr grid)
     python src/scripts/m8_lists.py test   [n_jobs]       -> src/scripts/lists/m8_test_<j>.txt    (test, selected lr)
+    python src/scripts/m8_lists.py binfl  [n_jobs]       -> src/scripts/lists/m8_binfl_<j>.txt   (val smoke, L-BFGS,
+                                                            cost.b_infl in BINFL: choice of the weaker background)
 Lines run from the project root with src/scripts/sb_parallel.sh; logs in tmp/logs/m8/.
 """
 
@@ -19,6 +21,9 @@ PATTERNS = ("full", "x_only")
 GRIDS = {"gd": [1e-3, 3e-3, 1e-2, 3e-2, 1e-1], "adagrad": [0.03, 0.1, 0.3, 1.0, 3.0],
          "adam": [0.03, 0.1, 0.3, 1.0, 3.0]}
 PY = "python src/run_4dvar_v2.py"
+BINFL = (1.0, 4.0, 16.0)
+WINDOWS = {60: "tmp/data", 100: "tmp/data_w100", 160: "tmp/data_w160"}   # feasibility of longer windows (2026-11-25)
+FEAS_LR = {"gd": 0.01, "adagrad": 0.3, "adam": 0.3, "lbfgs_wolfe": 1.0}  # mid-grid lr: runs only, no tuning
 
 
 def line(model, constraint, pattern, method, lr, split, out, tag, extra=""):
@@ -71,6 +76,26 @@ def main():
                         lines.append(line(m, c, p, meth, lr, "test", "tmp/results/m8/test", "test",
                                           "landscape_iter=true"))
         write(lines, "m8_test", n_jobs)
+    elif mode == "feas":                            # 10-case feasibility smoke, b_infl 4 (config default)
+        lines = []
+        for w, ddir in WINDOWS.items():
+            for m in MODELS:
+                for c in CONSTRAINTS:
+                    for p in PATTERNS:
+                        for meth, lr in FEAS_LR.items():
+                            lines.append(line(m, c, p, meth, lr, "val", f"tmp/results/m8/feas/w{w}",
+                                              f"feas_w{w}", f"data_dir=${{PWD}}/{ddir} n_cases=10 "
+                                              "landscape_iter=true"))
+        write(lines, "m8_feas", n_jobs)
+    elif mode == "binfl":
+        lines = []
+        for infl in BINFL:
+            for m in MODELS:
+                for c in CONSTRAINTS:
+                    for p in PATTERNS:
+                        lines.append(line(m, c, p, "lbfgs_wolfe", 1.0, "val", f"tmp/results/m8/binfl/b{infl:g}",
+                                          f"binfl{infl:g}", f"cost.b_infl={infl:g} landscape_iter=true"))
+        write(lines, "m8_binfl", n_jobs)
     else:
         raise ValueError(mode)
 

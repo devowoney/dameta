@@ -27,3 +27,11 @@
 - 2026-11-25: Pilot feedback: per-variable figures share one y range per figure; norm-only error figures removed
   (m8cmp_icerr_<c>_<p>, m8cmp_icerr_a, m8cmp_fcerr_<c>_<p>, code + files); new m8cmp_geom_xyz_<model> (J on the
   x-y / x-z / y-z planes through the L-BFGS analysis, strong). Jobs 82156, 82161.
+- 2026-11-25: Pilot redefinition of the 4D-Var experiment (see decisions): code `background.time_shift`
+  (background.py, gen_data_v2), gen_data_v2.yaml (obs_every 20, σ_o² 4, history 105), run_4dvar_v2 `cost.b_infl` and
+  σ_o² from the data, report header from the data, m8_lists `binfl`, report_classic_4dv `binfl`. Data regenerated
+  (job 82279), hybrid B retuned with the extended s² grid (job 82293). B-inflation val smoke, 48 L-BFGS runs
+  (jobs 82294-82305) -> tmp/results/m8/binfl.md.
+- 2026-11-25: binfl smoke done (48/48; job 82297 stuck on 207 -> resubmitted 82909 on 216); table tmp/results/m8/binfl.md. Waiting for the pilot's b_infl choice before the lr sweep / test.
+- 2026-11-25: Pilot: b_infl 4, longer windows, 10-case feasibility first. Data tmp/data_w{100,160} (job 82931); feasibility smoke 192 runs (3 windows × 4 models × 2 × 2 × gd 0.01 / adagrad 0.3 / adam 0.3 / L-BFGS; jobs 82932-82943) -> tmp/results/m8/feas.md
+- 2026-11-25: Feasibility smoke done (192/192, 0 diverged; job 82936 stuck on 207 -> 83127 on 204). tmp/results/m8/feas.md. Waiting for the pilot's window choice.
