@@ -20,6 +20,10 @@ Record (NetCDF, dims ic, k, kstep, lead, var[, ctrl_t, param]):
     rmse_fc     forecast from the analysis with the ESTIMATION model (bpe: with the estimated parameters) — operational
     rmse_fc_m1  forecast from the analysis with the TRUE model — initial-condition quality
     rmse_fc_b   forecast from the first guess with the estimation model
+    sol_deg     |x0_a - x_true(0)|_2                                                    (M8, 2026-11-25)
+    traj_deg    1/K sum_k |x_a^k - x_true^k|_2, k = 0 .. L + F (window + forecast), x_a^k from the ESTIMATION model
+With landscape_iter=true (M8): cos_truth, lam_min, lam_max, kappa_H, n_neg per iterate [ic, k] (every hess_every
+iterations) and at the analysis (*_a [ic], eig_a [ic, d]); see src/dameta/eval/landscape.py.
 """
 
 import json
@@ -38,11 +42,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dameta import __version__  # noqa: E402
 from dameta.da import CostConfig, FourDVarCost, ParamFourDVarCost, forecast_from_analysis, run_fourdvar  # noqa: E402
+from dameta.da.cost import window_trajectory  # noqa: E402
 from dameta.da.gradients import FDGradient, HybridGradient  # noqa: E402
 from dameta.data.background import load_hybrid_background  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 from dameta.dynamics.models import build_model, canonical, load_registry, model_params  # noqa: E402
+from dameta.eval.landscape import cos_truth, hessian_batch, spectrum  # noqa: E402
 
 OmegaConf.register_new_resolver("project_root", lambda: str(Path(__file__).resolve().parent.parent), replace=True)
 OmegaConf.register_new_resolver("bpe_suffix", lambda p: "_bpe" if p == "bpe" else "", replace=True)
@@ -57,7 +63,8 @@ def truth_step(ds):
 
 def registry(cfg):
     """Model-rectangle registry (models.yaml) with optional top-level overrides, e.g. registry_overrides.eps1=0.01."""
-    return load_registry(**OmegaConf.to_container(cfg.get("registry_overrides", {}) or {}))
+    ov = cfg.get("registry_overrides", None)
+    return load_registry(**(OmegaConf.to_container(ov) if ov else {}))
 
 
 def model_kind(cfg) -> str:
@@ -157,11 +164,14 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
         step_est = step_b = base.step
     with torch.no_grad():
         fc_a = forecast_from_analysis(step_est, x0_a, ccfg, F, eta).numpy()
+        win_a = window_trajectory(step_est, x0_a, ccfg, eta).numpy()                 # [n, L + 1, 3]
         fc_m1 = forecast_from_analysis(step_t, x0_a, ccfg, F, eta).numpy()
         fc_b = forecast_from_analysis(step_b, x0_b, ccfg, F).numpy()
         c_true = FourDVarCost(step_t, P["y"], P["mask"], x0_b, ccfg, weak=weak, b_inv=b_inv)
         j_true = c_true(*c_true.unpack(c_true.pack(x0_a, eta)))
     fin = finite.numpy()
+    traj_a = np.concatenate([win_a[:, :L], fc_a], 1)                                # t = 0 .. L + F
+    traj_deg = np.linalg.norm(traj_a - x_true[:, :L + F + 1], axis=-1).mean(1)
     nanif = lambda a: np.where(fin.reshape((-1,) + (1,) * (a.ndim - 1)), a, np.nan)   # noqa: E731
     out = xr.Dataset(
         data_vars={
@@ -171,6 +181,8 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
             "x0_a": (("ic", "var"), res["x0_a"]),
             "rmse_x0": (("ic",), nanif(rmse(x0_a.numpy(), x_true[:, 0]))),
             "rmse_x0_b": (("ic",), rmse(x0_b.numpy(), x_true[:, 0])),
+            "sol_deg": (("ic",), nanif(np.linalg.norm(x0_a.numpy() - x_true[:, 0], axis=-1))),
+            "traj_deg": (("ic",), nanif(traj_deg)),
             "J_true_final": (("ic",), nanif(j_true.numpy())),
             "rmse_fc": (("ic", "lead"), nanif(rmse(fc_a, truth_fc))),
             "rmse_fc_m1": (("ic", "lead"), nanif(rmse(fc_m1, truth_fc))),
@@ -231,6 +243,56 @@ class G1Recorder:
         return (("ic", "k"), pad(self.g1_grad, max_iter + 1)), (("ic", "kstep"), pad(self.g1_move, max_iter))
 
 
+class LandscapeRecorder:
+    """
+    on_step hook of run_fourdvar (M8): at iterate c^k of the ESTIMATION-model problem (cases still active)
+        cos_truth[k] = cos(x_true(0) - x0^k, -grad_x0 J(c^k))   (gradient already computed by the optimizer)
+        lam_min, lam_max, kappa_H, n_neg [k] = spectrum of the Hessian of J w.r.t. the control (every hess_every)
+    Frozen / skipped iterates: NaN. Its own time is excluded from the optimizer wall_s (reporting only).
+    """
+
+    KEYS = ("lam_min", "lam_max", "kappa_H", "n_neg")
+
+    def __init__(self, P: dict, cost, hess_every: int = 1):
+        self.cost, self.every = cost, max(int(hess_every), 1)
+        self.x0_true = torch.tensor(P["ds"].x_true.values[:, 0])
+        self.n = self.x0_true.shape[0]
+        self.rec = {k: [] for k in ("cos_truth",) + self.KEYS}
+        self.time_s = 0.0
+
+    def __call__(self, k, c, g, active):
+        t0 = time.perf_counter()
+        act = active.bool()
+        nan = torch.full((self.n,), float("nan"), dtype=c.dtype)
+        self.rec["cos_truth"].append(torch.where(act, cos_truth(c[:, :3].detach(), g[:, :3], self.x0_true), nan))
+        if k % self.every == 0:
+            sp = spectrum(hessian_batch(self.cost, c))
+            for key in self.KEYS:
+                self.rec[key].append(torch.where(act, sp[key], nan))
+        else:
+            for key in self.KEYS:
+                self.rec[key].append(nan)
+        self.time_s += time.perf_counter() - t0
+
+    def arrays(self, max_iter: int) -> dict:
+        def pad(lst):
+            a = torch.stack(lst, 1).numpy() if lst else np.zeros((self.n, 0))
+            return (("ic", "k"), np.concatenate([a, np.full((self.n, max_iter + 1 - a.shape[1]), np.nan)], 1))
+        return {key: pad(v) for key, v in self.rec.items()}
+
+    def at_analysis(self, c_a: torch.Tensor) -> dict:
+        """Same diagnostics at the final control (all cases; reporting only)."""
+        t0 = time.perf_counter()
+        _, g = self.cost.grad(c_a)
+        self.cost.n_grad_evals -= 1                                  # reporting call: not an optimizer evaluation
+        sp = spectrum(hessian_batch(self.cost, c_a))
+        out = {"cos_truth_a": (("ic",), cos_truth(c_a[:, :3], g[:, :3], self.x0_true).numpy()),
+               "eig_a": (("ic", "eig"), sp["eig"].numpy())}
+        out.update({f"{key}_a": (("ic",), sp[key].numpy()) for key in self.KEYS})
+        self.time_s += time.perf_counter() - t0
+        return out
+
+
 def run(cfg: DictConfig) -> xr.Dataset:
     P = setup_problem(cfg, cfg.split, cfg.n_cases)
     base, cost = P["cost"], P["cost"]
@@ -253,9 +315,22 @@ def run(cfg: DictConfig) -> xr.Dataset:
     if cfg.get("g1_iter", False):
         g1 = G1Recorder(P, base)
         hook = g1
+    # M8 (2026-11-25, flag landscape_iter): truth-correction cosine + Hessian spectrum per iterate (exact cost only)
+    lands = None
+    if cfg.get("landscape_iter", False):
+        assert hook is None and cfg.gradient == "exact", "landscape_iter: exact gradient, no other hook"
+        lands = LandscapeRecorder(P, base, int(cfg.get("hess_every", 1)))
+        hook = lands
     res = run_fourdvar(cost, P["x0_b"], cfg.method, float(cfg.lr), int(cfg.max_iter), float(cfg.tol), on_step=hook)
     conf = f"{cfg.problem}:{cfg.model}" + (f":{cfg.emulator}" if cfg.model == "emulator" else "")
     out = evaluate_v2(cfg, P, res, conf)
+    if lands is not None:                                          # M8 landscape diagnostics
+        for key, val in lands.arrays(int(cfg.max_iter)).items():
+            out[key] = val
+        out.attrs["wall_s"] = float(out.attrs["wall_s"]) - lands.time_s    # in-loop hook time only
+        for key, val in lands.at_analysis(torch.tensor(res["control_final"])).items():
+            out[key] = val
+        out.attrs["landscape_hook_s"] = lands.time_s
     if g1 is not None:
         out["g1_grad"], out["g1_move"] = g1.arrays(int(cfg.max_iter))
         out.attrs["wall_s"] = float(out.attrs["wall_s"]) - g1.time_s     # optimizer time only

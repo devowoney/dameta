@@ -1,0 +1,1 @@
+MPLCONFIGDIR=/homes/j25lee/.claude/jobs/718ba4a0/tmp/mpl python src/fig_classic_4dv.py > tmp/logs/m8/fig_cmp.log 2>&1

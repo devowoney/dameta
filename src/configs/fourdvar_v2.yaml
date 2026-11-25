@@ -20,6 +20,8 @@ max_iter: 1000
 tol: 1.0e-6
 n_cases: null
 g1_iter: false                # ICE table: record per-iterate G1 (cos with the true-model gradient), reporting only
+landscape_iter: false         # M8: cos_truth + Hessian spectrum per iterate and at the analysis (reporting only)
+hess_every: 1                 # M8: Hessian every n iterations (1 = every iterate)
 
 bpe_prior_rel_std: 0.1        # parameter prior std = 10 % of each prior value
 
