@@ -2,7 +2,8 @@
 M8 command lists (branch m8-classic-4dv): classical 4D-Var on the model rectangle (F1, F2, E1, E2).
 
     python src/scripts/m8_lists.py smoke                 -> src/scripts/lists/m8_smoke.txt
-    python src/scripts/m8_lists.py sweep  [n_jobs]       -> src/scripts/lists/m8_sweep_<j>.txt   (val, lr grid)
+    python src/scripts/m8_lists.py sweep  [n_jobs] [n_cases]  -> src/scripts/lists/m8_sweep_<j>.txt   (val, lr grid;
+                                                            n_cases: first n val cases, 2026-11-26 pilot: 10)
     python src/scripts/m8_lists.py test   [n_jobs]       -> src/scripts/lists/m8_test_<j>.txt    (test, selected lr)
     python src/scripts/m8_lists.py binfl  [n_jobs]       -> src/scripts/lists/m8_binfl_<j>.txt   (val smoke, L-BFGS,
                                                             cost.b_infl in BINFL: choice of the weaker background)
@@ -22,7 +23,8 @@ GRIDS = {"gd": [1e-3, 3e-3, 1e-2, 3e-2, 1e-1], "adagrad": [0.03, 0.1, 0.3, 1.0, 
          "adam": [0.03, 0.1, 0.3, 1.0, 3.0]}
 PY = "python src/run_4dvar_v2.py"
 BINFL = (1.0, 4.0, 16.0)
-WINDOWS = {60: "tmp/data", 100: "tmp/data_w100", 160: "tmp/data_w160"}   # feasibility of longer windows (2026-11-25)
+WINDOWS = {60: "tmp/data_w60", 100: "tmp/data_w100", 160: "tmp/data"}    # feasibility of longer windows (2026-11-25);
+                                                                           # 1.6 TU = tmp/data since 2026-11-26
 FEAS_LR = {"gd": 0.01, "adagrad": 0.3, "adam": 0.3, "lbfgs_wolfe": 1.0}  # mid-grid lr: runs only, no tuning
 
 
@@ -43,6 +45,7 @@ def write(lines, name, n_jobs):
 def main():
     mode = sys.argv[1]
     n_jobs = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+    n_cases = int(sys.argv[3]) if len(sys.argv) > 3 else None
     if mode == "smoke":
         lines = ["python src/tests/test_landscape.py > tmp/logs/m8/test_landscape.log 2>&1",
                  "python src/tests/test_models.py > tmp/logs/m8/test_models.log 2>&1"]
@@ -63,7 +66,8 @@ def main():
                     for meth, grid in GRIDS.items():
                         base = [] if only_extra else grid
                         for lr in base + extra_grid.get(f"{m}/{c}/{p}/{meth}", []):
-                            lines.append(line(m, c, p, meth, lr, "val", "tmp/results/m8/sweep", "sweep"))
+                            lines.append(line(m, c, p, meth, lr, "val", "tmp/results/m8/sweep", "sweep",
+                                              f"n_cases={n_cases}" if n_cases else ""))
         write(lines, "m8_sweep_extra" if only_extra else "m8_sweep", n_jobs)
     elif mode == "test":
         sel = json.loads((ROOT / "tmp/results/m8/selected_lr.json").read_text())
@@ -87,6 +91,15 @@ def main():
                                               f"feas_w{w}", f"data_dir=${{PWD}}/{ddir} n_cases=10 "
                                               "landscape_iter=true"))
         write(lines, "m8_feas", n_jobs)
+    elif mode == "feasq":                           # 1.6 TU, per-model diagonal Q (cost.q=model): weak vs strong
+        lines = []
+        for m in MODELS:
+            for c in CONSTRAINTS:
+                for p in PATTERNS:
+                    for meth, lr in FEAS_LR.items():
+                        lines.append(line(m, c, p, meth, lr, "val", "tmp/results/m8/feasq", "feasq",
+                                          "n_cases=10 landscape_iter=true hess_every=5"))
+        write(lines, "m8_feasq", n_jobs)
     elif mode == "binfl":
         lines = []
         for infl in BINFL:

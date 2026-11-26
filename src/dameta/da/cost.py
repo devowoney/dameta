@@ -35,6 +35,8 @@ class CostConfig:
     sigma_o2: float = 2.0   # R = sigma_o2 I
     sigma_b: float = 1.0    # B = sigma_b^2 I
     sigma_q: float = 0.1    # Q = sigma_q^2 I (weak constraint only)
+    q_var: Optional[tuple] = None   # (q_x, q_y, q_z): diagonal Q (variances) per obs interval; overrides sigma_q
+                                    # (M8 2026-11-26: per-model Q from the model's own one-interval error)
 
     @property
     def n_obs(self) -> int:
@@ -72,8 +74,15 @@ class FourDVarCost:
         innov = (traj[:, self.t_obs] - self.y) * self.mask    # H(x) - y on observed components only
         jb = self.jb(x0)
         jo = 0.5 * (innov**2).sum((-1, -2)) / self.cfg.sigma_o2
-        jq = 0.5 * (eta**2).sum((-1, -2)) / self.cfg.sigma_q**2 if self.weak else torch.zeros_like(jb)
+        jq = self.jq(eta) if self.weak else torch.zeros_like(jb)
         return {"Jb": jb, "Jo": jo, "Jq": jq, "J": jb + jo + jq}
+
+    def jq(self, eta: torch.Tensor) -> torch.Tensor:
+        """Model-error term: 1/2 sum_i eta_i^T Q^-1 eta_i, Q = sigma_q^2 I or diag(q_var)."""
+        if self.cfg.q_var is None:
+            return 0.5 * (eta**2).sum((-1, -2)) / self.cfg.sigma_q**2
+        q = torch.as_tensor(self.cfg.q_var, dtype=eta.dtype)
+        return 0.5 * (eta**2 / q).sum((-1, -2))
 
     def jb(self, x0: torch.Tensor) -> torch.Tensor:
         """Background term: 1/2 |x0 - x0_b|^2 / sigma_b^2, or 1/2 (x0 - x0_b)^T B^-1 (x0 - x0_b) with b_inv."""

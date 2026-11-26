@@ -66,3 +66,21 @@ def load_hybrid_background(data_dir, split: str, name: str, seed: int = 42, hybr
     b_ens = torch.tensor(bg.B.values)
     b_h = a * b_ens + (1 - a) * s2 * torch.eye(3, dtype=b_ens.dtype)
     return torch.tensor(bg.x0_b.values), b_h, torch.linalg.inv(b_h), {"alpha": a, "s2": s2}
+
+
+def load_static_background(data_dir, split: str, name: str, seed: int = 42):
+    """
+    First guess of false model `name` and its STATIC, truth-free B (pilot 2026-11-26; src/estimate_b.py):
+    one 3x3 B per model, B = E[d d^T] - R from the TRAIN t0 innovations d = y_0 - x0_b, same for every case.
+    Returns torch tensors x0_b [n, 3], B [n, 3, 3] (expanded), B^-1 [n, 3, 3] and an info dict.
+    """
+    import json
+    from pathlib import Path
+    data_dir = Path(data_dir)
+    bg = xr.load_dataset(data_dir / f"l63v2_{split}_seed{seed}_bg_{name}.nc")
+    info = json.loads((data_dir / f"static_B_seed{seed}.json").read_text())[name]
+    b = torch.tensor(info["B"], dtype=torch.float64)
+    n = bg.sizes["ic"]
+    b_n = b.expand(n, 3, 3).clone()
+    return torch.tensor(bg.x0_b.values), b_n, torch.linalg.inv(b_n), {"cov": "static", "B": info["B"]}
+

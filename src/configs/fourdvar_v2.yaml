@@ -9,6 +9,8 @@ model: f1                     # estimation model (src/configs/models.yaml): l1 (
                               # | emulator (legacy v2 path, file `emulator`)
 emulator: rho275              # used only when model = emulator (legacy)
 background: null              # lagged-ensemble background name; null = the model's own (l1: `l1_background`)
+background_cov: static        # static = one truth-free 3x3 B per model (tmp/data/static_B_seed<S>.json, src/estimate_b.py;
+                              # pilot 2026-11-26) | hybrid = flow-dependent alpha B_ens + (1 - alpha) s2 I (earlier runs)
 l1_background: f1             # first guess / B used by the L1 perfect-model reference (same as F1, v2 convention)
 registry_overrides: {}        # top-level overrides of models.yaml, e.g. {eps1: 0.01, eps2: 0.05}
 method: adagrad               # gd | adagrad | adam | lbfgs_wolfe (strong-Wolfe L-BFGS reference, lr = 1)
@@ -29,6 +31,8 @@ cost:                         # window / obs geometry are read from the D1 v2 fi
   sigma_o2: null              # null = the data's sigma_o2 (D1 v2 attrs; 4.0 since 2026-11-25, was 2.0)
   b_infl: 4.0                 # weaker background (pilot 2026-11-25): B = b_infl * B_hybrid in J_b (1 = tuned hybrid)
   sigma_q: 0.1
+  q: model                    # model = per-model diagonal Q (tmp/data/model_q_seed<S>.json, src/estimate_q.py; pilot
+                              # 2026-11-26: sigma_q 0.1 was 4-30x below the model error, weak == strong); null = sigma_q^2 I
 forecast: 500
 
 data_dir: ${project_root:}/tmp/data

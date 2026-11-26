@@ -44,7 +44,7 @@ from dameta import __version__  # noqa: E402
 from dameta.da import CostConfig, FourDVarCost, ParamFourDVarCost, forecast_from_analysis, run_fourdvar  # noqa: E402
 from dameta.da.cost import window_trajectory  # noqa: E402
 from dameta.da.gradients import FDGradient, HybridGradient  # noqa: E402
-from dameta.data.background import load_hybrid_background  # noqa: E402
+from dameta.data.background import load_hybrid_background, load_static_background  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
 from dameta.dynamics.models import build_model, canonical, load_registry, model_params  # noqa: E402
@@ -113,7 +113,13 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     # feature flag `data_prefix` (2026-11-16): l63v2 = D1 v2 (obs every 10 steps); l63v2d = dense obs (every step,
     # src/make_dense_obs.py). The background (first guess, B) is the D1 v2 one in both cases.
     ds = xr.load_dataset(Path(cfg.data_dir) / f"{cfg.get('data_prefix', 'l63v2')}_{split}_seed{cfg.seed}.nc")
-    x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
+    # background covariance (pilot 2026-11-26, flag background_cov): static = one truth-free 3x3 B per model
+    # (src/estimate_b.py, same for every case); hybrid = flow-dependent alpha B_ens + (1 - alpha) s2 I (earlier runs)
+    if cfg.get("background_cov", "hybrid") == "static":
+        x0_b, b_h, b_inv, ab = load_static_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
+    else:
+        x0_b, b_h, b_inv, ab = load_hybrid_background(cfg.data_dir, split, background_name(cfg), int(cfg.seed))
+        ab = {"cov": "hybrid", **ab}
     # weaker background term (pilot 2026-11-25, flag cost.b_infl): J_b uses b_infl * B_hybrid, so that J_b convexifies
     # J less and the model-dependent J_o shapes the geometry (1.0 = tuned hybrid B, earlier behaviour)
     infl = float(cfg.cost.get("b_infl", 1.0))
@@ -122,9 +128,15 @@ def setup_problem(cfg: DictConfig, split: str, n_cases=None) -> dict:
     if n_cases is not None:
         n = int(n_cases)
         ds, x0_b, b_h, b_inv = ds.isel(ic=slice(0, n)), x0_b[:n], b_h[:n], b_inv[:n]
+    q_var = None
+    if cfg.cost.get("q", None) == "model":            # per-model diagonal Q (estimated on train, src/estimate_q.py)
+        qj = json.loads((Path(cfg.data_dir) / f"model_q_seed{cfg.seed}.json").read_text())
+        q = qj[background_name(cfg)]                   # l1 reuses its background model's Q (l1_background)
+        assert int(q["obs_every"]) == int(ds.attrs["obs_every"]), "Q estimated for another obs interval"
+        q_var = tuple(float(v) for v in q["q_var"])
     ccfg = CostConfig(window=int(ds.attrs["window"]), obs_every=int(ds.attrs["obs_every"]),
                       sigma_o2=float(ds.attrs["sigma_o2"] if cfg.cost.sigma_o2 is None else cfg.cost.sigma_o2),
-                      sigma_q=float(cfg.cost.sigma_q))
+                      sigma_q=float(cfg.cost.sigma_q), q_var=q_var)
     y = torch.tensor(ds.y_obs.values)
     mask = torch.tensor(ds.obs_mask.sel(pattern=cfg.pattern).values)
     weak = cfg.constraint == "weak"
@@ -200,8 +212,10 @@ def evaluate_v2(cfg: DictConfig, P: dict, res: dict, configuration: str) -> xr.D
         attrs={"config": json.dumps(OmegaConf.to_container(cfg, resolve=True)), "wall_s": res["wall_s"],
                "dameta_version": __version__, "torch_version": torch.__version__, "dataset": "D1v2",
                "configuration": configuration, "background": background_name(cfg),
-               "hybrid_alpha": P["ab"]["alpha"], "hybrid_s2": P["ab"]["s2"], "b_infl": P["ab"]["b_infl"],
-               "sigma_o2": ccfg.sigma_o2, "obs_every": ccfg.obs_every},
+               "background_cov": P["ab"]["cov"], "b_infl": P["ab"]["b_infl"],
+               "B_info": json.dumps({k: v for k, v in P["ab"].items() if k not in ("cov", "b_infl")}),
+               "sigma_o2": ccfg.sigma_o2, "obs_every": ccfg.obs_every,
+               "q_var": json.dumps(ccfg.q_var) if ccfg.q_var else f"sigma_q^2 = {ccfg.sigma_q ** 2:g}"},
     )
     if weak:
         out["eta_final"] = (("ic", "ctrl_t", "var"), res["eta_final"])

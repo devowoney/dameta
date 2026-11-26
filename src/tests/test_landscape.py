@@ -95,7 +95,7 @@ def main():
     # 3. 4D-Var Hessian vs central FD of the adjoint gradient (F1 / F2 L63, E1 / E2 emulator; strong and weak)
     for model, weak in (("f1", False), ("f1", True), ("f2", False), ("e1", False), ("e1", True), ("e2", False)):
         ds, cost, x0_b = problem(model, weak)
-        c = cost.pack(x0_b, torch.zeros(N, cost.cfg.n_obs - 1, 3) if weak else None) + 0.1 * torch.randn(N, 21 if weak else 3)
+        c = cost.pack(x0_b, torch.zeros(N, cost.cfg.n_obs - 1, 3) if weak else None) + 0.1 * torch.randn(N, 3 * cost.cfg.n_obs if weak else 3)
         hx = hessian_batch(cost, c)
         hf = fd_hessian(cost, c)
         err = float(((hx - hf).flatten(1).norm(dim=1) / hx.flatten(1).norm(dim=1)).max())

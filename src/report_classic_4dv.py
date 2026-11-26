@@ -11,7 +11,7 @@ M8 report (branch m8-classic-4dv): classical 4D-Var on the model rectangle F1, F
 
 Metrics (mean ± std over the test cases; per-iterate curves: median and interquartile range over active cases):
     sol_deg     |x0_a - x_true(0)|_2
-    traj_deg    1/K sum_k |x_a^k - x_true^k|_2, k = 0 .. 560 (0.6-TU window + 5-TU forecast, estimation model)
+    traj_deg    1/K sum_k |x_a^k - x_true^k|_2, k = 0 .. L + 500 (window + 5-TU forecast, estimation model)
     cos_truth   cos(x_true(0) - x0^k, -grad_x0 J(c^k))       (k = 0: first guess; _a: at the analysis)
     lam_min, lam_max, kappa_H = lam_max / lam_min (positive-definite cases only), n_neg = # negative eigenvalues of the
     Hessian of J w.r.t. the control (strong d = 3, weak d = 21), at the analysis.
@@ -58,7 +58,8 @@ def cmd_select():
     groups = {}
     for r in rows:
         groups.setdefault(f"{r['model']}/{r['constraint']}/{r['pattern']}/{r['method']}", []).append(r)
-    chosen, edges, md = {}, [], ["# M8 lr sweep (val, 200 cases)", ""]
+    n_cases = sorted({int(xr.open_dataset(p).sizes["ic"]) for p in (RES / "sweep").glob("*/*.nc")})
+    chosen, edges, md = {}, [], [f"# M8 lr sweep (val, {'/'.join(map(str, n_cases))} cases)", ""]
     for key in sorted(groups):
         g = sorted(groups[key], key=lambda r: r["lr"])
         best = select(g)
@@ -274,5 +275,31 @@ def cmd_feas():
     print(f"-> {RES / 'feas.md'}")
 
 
+def cmd_feasq():
+    """Weak vs strong with the per-model diagonal Q (1.6 TU, 10 val cases): tmp/results/m8/feasq -> feasq.md."""
+    head = ["model", "obs", "optimizer", "scheme", "n", "diverged", "grad evals", "sol_deg", "traj_deg",
+            "median |eta|", "lam_min a", "non-PD frac a", "non-PD frac iterates"]
+    md = ["# M8 weak vs strong, per-model diagonal Q (val, 10 cases, mean ± std over cases)", "", setup_line(), "",
+          "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for m in MODELS:
+        for p in PATTERNS:
+            for meth in METHODS:
+                for c in CONSTRAINTS:
+                    fs = sorted((RES / "feasq" / m).glob(f"bice_{c}_{p}_{meth}_lr*_val.nc"))
+                    if not fs:
+                        continue
+                    ds, cfg = load(fs[0])
+                    it = ds.lam_min.values
+                    eta = f"{np.nanmedian(np.abs(ds.eta_final.values)):.3f}" if "eta_final" in ds else "–"
+                    md.append("| " + " | ".join([
+                        NAMES[m], p, MNAME[meth], c, str(ds.sizes["ic"]), str(int(ds.diverged.sum())),
+                        ms(ds.n_grad_evals.values, "{:.0f}"), ms(ds.sol_deg.values), ms(ds.traj_deg.values), eta,
+                        ms(ds.lam_min_a.values, "{:.3g}"), f"{(ds.lam_min_a.values <= 0).mean():.2f}",
+                        f"{(it[np.isfinite(it)] <= 0).mean():.2f}"]) + " |")
+    (RES / "feasq.md").write_text("\n".join(md) + "\n")
+    print(f"-> {RES / 'feasq.md'}")
+
+
 if __name__ == "__main__":
-    {"select": cmd_select, "report": cmd_report, "binfl": cmd_binfl, "feas": cmd_feas}[sys.argv[1]]()
+    {"select": cmd_select, "report": cmd_report, "binfl": cmd_binfl, "feas": cmd_feas,
+     "feasq": cmd_feasq}[sys.argv[1]]()

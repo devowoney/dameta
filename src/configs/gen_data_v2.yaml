@@ -10,7 +10,8 @@ l63:                           # TRUTH model
   dt: 0.01
 
 data:
-  window: 60                   # 0.6 TU (Pearson decorrelation time, pilot 2026-11-24; was 110 = 1.1 TU)
+  window: 160                  # 1.6 TU (pilot 2026-11-26, after the 0.6 / 1.0 / 1.6-TU feasibility study; was 60 = 0.6 TU
+                               # Pearson decorrelation, 2026-11-24; 0.6 / 1.0-TU data kept in tmp/data_w60, tmp/data_w100)
   forecast: 500
   obs_every: 20                # 4 obs times (t = 0, 20, 40, 60); pilot 2026-11-25 (was 10): harder, sparser problem
   sigma_o2: 4.0                # pilot 2026-11-25 (was 2.0)
