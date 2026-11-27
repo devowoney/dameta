@@ -1,0 +1,4 @@
+python src/gen_data_v2.py backgrounds_only=true 'background.registry_models=[l1]' > tmp/logs/m8/m8r_gen_L1.log 2>&1 && python src/estimate_b.py --data-dir tmp/data --models l1 >> tmp/logs/m8/m8r_gen_L1.log 2>&1
+python src/gen_data_v2.py truth_model=f1 out_dir=${PWD}/tmp/data_tF1 'background.registry_models=[f1]' > tmp/logs/m8/m8r_gen_F1.log 2>&1 && python src/estimate_b.py --data-dir tmp/data_tF1 --models f1 >> tmp/logs/m8/m8r_gen_F1.log 2>&1
+python src/gen_data_v2.py truth_model=f2 out_dir=${PWD}/tmp/data_tF2 'background.registry_models=[f2]' > tmp/logs/m8/m8r_gen_F2.log 2>&1 && python src/estimate_b.py --data-dir tmp/data_tF2 --models f2 >> tmp/logs/m8/m8r_gen_F2.log 2>&1
+python src/tests/test_landscape.py > tmp/logs/m8/m8r_test_landscape.log 2>&1

@@ -104,3 +104,198 @@ model error) and the weak-constraint analysis coincided with the strong-constrai
   (src/dameta/da/cost.py); runner flag `cost.q: model`.
 - Data: D1 v3 (tmp/data; window 160, obs every 20, σ_o² = 4, first-guess time shift 5 steps), seed 42, train split
   for both estimations; result files record `background_cov`, `B_info`, `b_infl`, `q_var`.
+
+---
+
+## M8-R — Isolated impacts of model misspecification and model approximation on strong- and weak-constraint 4D-Var (experiment definition, 2026-11-27)
+
+**Status.** The experiment is defined, implemented and checked for feasibility on a 10-case validation smoke run:
+120 / 120 runs completed, with one diverged case (F1, weak, x-only, GD, truth L1). **The 200-case test has not been
+run, so no result is reported in this section.** The M8 configuration above (each model with its own first guess and
+B, oracle Q) is kept as the control experiment.
+
+### 1. Objective and design
+
+The aim is to measure, separately, how two kinds of dynamical-model error change (a) the geometry of the 4D-Var cost
+function and (b) the quality of its solution, under strong and weak constraint.
+
+- **Misspecification (L1 → F1, F2).** The model is physically consistent but has wrong parameters. Its trajectory is
+  biased, but its tangent-linear model and adjoint are exact for the model actually used, so the error mainly moves
+  the minimum of J.
+- **Approximation (F1 → E1, F2 → E2).** A learned emulator replaces its physical teacher. It can follow the teacher's
+  trajectory closely while having a different Jacobian, so it can also distort the gradient and the curvature of J.
+
+**Model rectangle** (src/configs/models.yaml):
+
+| model | definition | parameters / architecture |
+|---|---|---|
+| L1 | Lorenz-63, RK4, Δt = 0.01 | θ_L = (σ, ρ, β) = (10, 28, 8/3) |
+| F1 | L63 with θ = θ_L ⊙ (1 + ε₁ d), d = (1, 1, 1)/√3 | ε₁ = 0.03 → θ = (10.173, 28.485, 2.713) |
+| F2 | same, ε₂ = 0.18 | θ = (11.039, 30.910, 2.944) |
+| E1 / E2 | MLP tendency + RK4, trained on F1 / F2 trajectories | 10 training initial conditions, 1 hidden layer × 8 (SiLU) |
+
+Model error over one observation interval, relative to σ_o (m7 screen): L1→F1 0.155, L1→F2 0.958, F1→E1 0.142,
+F2→E2 0.126. The mild physical step (L1→F1) and the emulator steps are therefore of comparable size. This allows a
+direct comparison of a physics error and an emulator error of the same magnitude.
+
+**Twin experiments.** In every comparison, the imperfect model and a perfect-model reference assimilate the same
+observations of the same truth, start from the same first guess and use the same B. Only the dynamics inside the cost
+differ. The degradation is the paired per-case difference Δ = metric(model) − metric(reference).
+
+| stage | truth = observations | shared first guess / B | strong | weak (Q = q_m I) | question |
+|---|---|---|---|---|---|
+| A1 misspecification | L1 | L1 lagged forecast | **L1 (ref.)**, F1, F2 | F1, F2 | cost of wrong physics |
+| A2 approximation, isolated | F1 | F1 lagged forecast | **F1 (ref.)**, E1 | E1 | cost of the emulator alone |
+| A2 approximation, isolated | F2 | F2 lagged forecast | **F2 (ref.)**, E2 | E2 | same, with a strongly misspecified teacher |
+| B approximation, realistic | L1 | L1 lagged forecast | E1, E2 (vs F1, F2, L1) | E1, E2 | emulator cost on real data |
+
+- **Stage A2.** The teacher is the truth, so the emulator error is isolated, and the data lie in the emulator's
+  training distribution.
+- **Stage B (real-life setting).** The emulator error adds to the teacher's misspecification, and the data (L1
+  trajectories) lie mildly outside the emulator's training distribution. Comparing the approximation increment
+  E_k − F_k in stage B (L1 observations) with the same increment in stage A2 (F_k observations) measures how the two
+  errors interact.
+- **Reference.** The perfect-model reference runs with strong constraint only: with a perfect model Q = 0, and the
+  weak problem reduces to the strong one. Weak-constraint runs of the imperfect models are compared with this strong
+  reference.
+
+### 2. Assimilation problem
+
+Window L = 160 steps (1.6 TU). Observations every K = 20 steps (t_i = iK, i = 0, …, 8, so nine observation times).
+Forecast of 500 steps (5 TU) beyond the window.
+
+    y_i = H x_true(t_i) + ε_i,   ε_i ~ N(0, R),   R = σ_o² I,   σ_o² = 4,   H = I_3 (full) or [1 0 0] (x only).
+
+Strong constraint (control x_0 ∈ ℝ³), with x_{k+1} = M_m(x_k):
+
+    J_s(x_0) = ½ (x_0 − x_b)ᵀ (λB)⁻¹ (x_0 − x_b) + ½ Σ_{i=0}^{8} (H x_{t_i} − y_i)ᵀ R⁻¹ (H x_{t_i} − y_i).
+
+Weak constraint (control (x_0, η_1, …, η_8) ∈ ℝ²⁷), with x_{t_i} = M_m^K(x_{t_{i−1}}) + η_i:
+
+    J_w = the J_s terms on that trajectory + ½ Σ_{i=1}^{8} η_iᵀ Q_m⁻¹ η_i.
+
+λ = 4 (b_infl): the background term is deliberately weakened, so that the model-dependent observation term shapes the
+landscape.
+
+### 3. First guess x_b (shared by all models of a truth)
+
+x_b is the truth model's time-lagged forecast at lead 0.5 TU (50 steps). It starts from the true state, is valid at
+t_0 − 5 steps, and is used as the state at t_0. Because the forecasting model is the truth model itself,
+
+    x_b = x_true(t_0 − 5 Δt)      (verified: max |x_b − x_true(t_0 − 5)| = 0 on every split).
+
+The first-guess error is therefore a pure timing error, independent of the estimation model. Median
+|x_b − x_true(t_0)| on the test split: 2.77 (truth L1), 2.92 (F1), 3.26 (F2). All models of a truth (reference, F and
+E) start from this x_b.
+
+### 4. Background-error covariance B (static, truth-free, shared)
+
+B is one fixed 3×3 matrix per truth, the same for every case and every estimation model. It is estimated from the
+innovations at t_0 on the training set (n = 1000 cases):
+
+    d = y_0 − x_b,   E[d dᵀ] = B + R   ⇒   B = (1/n) Σ_c d_c d_cᵀ − R.
+
+- **Second moment:** a first-guess bias counts as background error.
+- **Positive definiteness:** eigenvalues are floored at 1 % of tr B / 3; the floor was not active.
+- **Inputs:** only observations and first guesses are used.
+
+Calibration check (diagnostic only, uses the truth): χ² = eᵀ B⁻¹ e, with e = x_b − x_true(t_0); the expected mean is 3.
+
+| truth (x_b) | B (rows x, y, z) | √diag (x, y, z) | corr (xy, xz, yz) | eigenvalues | mean d | χ² train / val / test / test_ood |
+|---|---|---|---|---|---|---|
+| L1 | [4.55 5.40 −0.38; 5.40 14.09 −1.49; −0.38 −1.49 14.79] | 2.13, 3.75, 3.85 | 0.67, −0.05, −0.10 | 2.11, 13.92, 17.40 | −0.14, −0.26, 0.71 | 3.10 / 3.09 / 3.30 / 0.96 |
+| F1 | [5.65 6.38 0.05; 6.38 13.15 0.45; 0.05 0.45 16.11] | 2.38, 3.63, 4.01 | 0.74, 0.01, 0.03 | 2.00, 15.92, 16.99 | −0.04, 0.07, 0.50 | 3.16 / 3.56 / 3.71 / 0.94 |
+| F2 | [7.42 8.33 −0.53; 8.33 18.46 1.11; −0.53 1.11 24.84] | 2.72, 4.30, 4.98 | 0.71, −0.04, 0.05 | 2.90, 22.70, 25.13 | −0.03, 0.15, 1.09 | 3.14 / 2.98 / 3.39 / 0.85 |
+
+B is calibrated in distribution (χ² 3.0–3.7) and conservative in the held-out region (χ² ≈ 0.9). The x and y errors
+are correlated (≈ 0.7), as expected for a timing error along the attractor. F2's larger attractor (ρ = 30.9) gives a
+larger B. The cost uses λB = 4B.
+
+### 5. Model-error covariance Q (truth-free, χ²-tuned scalar per model)
+
+Q_m = q_m I, with q_m chosen per (truth, model) from the consistency of the weak-constraint minimum. For a consistent
+linear-Gaussian system, E[2 J_min] = p, the number of scalar observations (full: p = 9 × 3 = 27).
+
+**Procedure.** The tuning uses 50 training cases, full observations, weak-constraint L-BFGS, and the shared x_b and
+λB above. The q grid spans 10^[−3, 2] in steps of 0.25 decade, extended to 10³ for the L1-truth models. For each q:
+
+    r(q) = median over cases of 2 J_min(q) / p,     q_m = argmin_q |log r(q)|.
+
+**Rules, fixed before the choice:**
+- The **median** is used, not the mean. On the L1-truth problems, a minority of cases end in local minima with
+  2 J_min / p ≫ 1, which made the mean non-monotone in q (spread 2–4 × the mean).
+- **Plateau rule:** if |r(q_min) − 1| ≤ 5 % already at the smallest q, the χ² criterion cannot detect the model error.
+  q_m is then the largest q with r(q) ≥ 0.95, i.e. the most model error the data tolerate.
+
+The same q_m is used for x-only observations. No truth enters the choice.
+
+| truth | model | q_m | √q_m | median r(q_m) | mean ± std r(q_m) | r at q = 10⁻³ | rule |
+|---|---|---|---|---|---|---|---|
+| L1 | F1 | 0.1 | 0.32 | 0.97 | 1.65 ± 3.46 | 1.00 | plateau |
+| L1 | F2 | 3.16 | 1.78 | 1.06 | 4.15 ± 6.13 | 3.53 | crossing |
+| L1 | E1 | 0.056 | 0.24 | 1.00 | 1.71 ± 3.50 | 1.07 | crossing |
+| L1 | E2 | 3.16 | 1.78 | 1.06 | 3.84 ± 6.58 | 3.27 | crossing |
+| F1 | E1 | 0.18 | 0.42 | 1.02 | 1.38 ± 2.70 | 1.07 | crossing |
+| F2 | E2 | 0.032 | 0.18 | 0.95 | 1.04 ± 0.54 | 0.99 | plateau |
+
+Properties of the tuning:
+1. **Strong misspecification is clearly detected.** Without Q, F2 and E2 on L1 data are inconsistent (median
+   2 J_min / p ≈ 3.3–3.5 at q → 0). They get q ≈ 3.2, i.e. √q ≈ 1.8 ≈ 0.9 σ_o, the order of their one-interval model
+   error.
+2. **Mild errors are barely visible.** For F1 and E1 on L1, E1 on F1, and E2 on F2, the median ratio is already within
+   7 % of 1 with no Q. At this observation noise the χ² test hardly sees the model error, and q_m only marks how much
+   model error the data tolerate.
+3. **Local minima dominate a minority of cases.** The mean exceeds the median throughout the L1-truth problems; those
+   cases are governed by local minima, not by Gaussian misfit.
+
+The oracle diagonal Q of the M8 control (one-interval errors started from the truth) is replaced.
+
+### 6. Optimizers
+
+GD, Adagrad, Adam, and L-BFGS (strong-Wolfe line search, lr 1). The learning rates are those selected for the M8
+control (tmp/results/m8/selected_lr.json, per model × scheme × observation pattern × optimizer), with no new tuning.
+The references reuse a model's rates: L1 uses those of F1, and each F_k uses its own. max_iter 1000, tolerance 1e-6.
+
+### 7. Diagnostics
+
+**Geometry.** The exact Hessian of J with respect to the full control is computed by double backward, at every
+iterate and at the analysis (src/dameta/eval/landscape.py). From it:
+- λ_min(H), λ_max(H), the number of negative eigenvalues, and κ_H = λ_max / λ_min (only when H is positive definite);
+- the share of iterates with a non-positive-definite Hessian, i.e. the non-convex regions crossed by the optimizer;
+- cos(x_true(0) − x_0^k, −∇_{x_0} J): whether the descent direction points toward the truth;
+- J on the coordinate planes x–y, x–z and y–z through each model's L-BFGS analysis, for one shared case (weak: η fixed
+  at the analysed η_a).
+
+**Solution.**
+- |x_a(0) − x_true(0)| (sol_deg);
+- mean |x_a(t) − x_true(t)| over the window plus the 5-TU forecast, run with the estimation model (traj_deg);
+- forecast RMSE at 1 TU;
+- gradient evaluations to convergence, and the number of diverged cases.
+
+**Degradation** (paired per case, mean ± std over cases):
+- misspecification: F_k − L1 (stage A1);
+- approximation, isolated: E_k − F_k on F_k data (A2);
+- approximation, realistic: E_k − F_k on L1 data, and the total E_k − L1 (B);
+- interaction: [E_k − F_k]_B − [E_k − F_k]_A2. Stages A2 and B have different truths, so this is a difference of
+  distributions, not a paired difference.
+
+### 8. Run matrix and reproducibility
+
+There are 120 runs, each × {full, x-only} × {GD, Adagrad, Adam, L-BFGS}:
+- truth L1: L1 strong; F1, F2, E1 and E2 strong and weak;
+- truth F1: F1 strong; E1 strong and weak;
+- truth F2: F2 strong; E2 strong and weak.
+
+The test split has 200 cases (smoke: 10 validation cases).
+
+- **Data:** src/gen_data_v2.py, with `truth_model=f1|f2` (out_dir tmp/data_tF1 | tmp/data_tF2), and
+  `backgrounds_only=true background.registry_models=[l1]` on tmp/data. Commands are in
+  src/scripts/lists/m8r_gendata.txt; seed 42.
+- **B:** src/estimate_b.py `--models l1 | f1 | f2` → <data>/static_B_seed42.json.
+- **Q:** src/scripts/m8_lists.py `qtune` and `qtune_extra` → src/select_q.py → <data>/q_chi2_seed42.json and
+  tmp/results/m8r/qtune.md.
+- **Runs:** m8_lists `rect_smoke` / `rect`, i.e. run_4dvar_v2 with `data_dir`, `background=<truth model>`,
+  `background_cov=static`, `cost.q=null cost.sigma_q=√q_m` and `landscape_iter=true` →
+  tmp/results/m8r/<smoke|test>/<truth>/<model>/.
+- **Report and figures:** src/report_rect_4dv.py and src/fig_rect_4dv.py → tmp/results/m8r/rect_<sub>.{md,csv},
+  rect_<sub>_delta.csv, and tmp/figs/m8r_{land,geom}_*.

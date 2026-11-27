@@ -3,6 +3,8 @@
 # Design: memory/branches/m5-meta-grid/blueprint.md (pilot 2026-11-14).
 seed: 42
 
+truth_model: null              # null = the l63 block below; else a registry model (models.yaml) as the truth
+                               # (M8-R stage A2: f1 / f2 with the exact registry theta; pilot 2026-11-26)
 l63:                           # TRUTH model
   sigma: 10.0
   rho: 28.0
@@ -13,7 +15,7 @@ data:
   window: 160                  # 1.6 TU (pilot 2026-11-26, after the 0.6 / 1.0 / 1.6-TU feasibility study; was 60 = 0.6 TU
                                # Pearson decorrelation, 2026-11-24; 0.6 / 1.0-TU data kept in tmp/data_w60, tmp/data_w100)
   forecast: 500
-  obs_every: 20                # 4 obs times (t = 0, 20, 40, 60); pilot 2026-11-25 (was 10): harder, sparser problem
+  obs_every: 20                # 9 obs times (t = 0, 20, ..., 160); pilot 2026-11-25 (was 10): harder, sparser problem
   sigma_o2: 4.0                # pilot 2026-11-25 (was 2.0)
   history: 105                 # truth stored before t0 (max lag 100 + time_shift 5)
   spinup: 1000

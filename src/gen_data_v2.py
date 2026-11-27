@@ -6,6 +6,8 @@ Usage (project root, env oceanai):
     python src/gen_data_v2.py n_ic.train=50 'background.false_models={f1:{kind:l63,sigma:10,rho:27.5,beta:2.6667}}'
     python src/gen_data_v2.py backgrounds_only=true            # model rectangle: reuse truth/obs files, write the
                                                                # backgrounds of background.registry_models
+    python src/gen_data_v2.py truth_model=f1 out_dir=$PWD/tmp/data_tF1 'background.registry_models=[f1,e1]'
+                                                               # M8-R stage A2: truth = registry model (exact theta)
 Outputs: tmp/data/l63v2_<split>_seed<S>.nc and tmp/data/l63v2_<split>_seed<S>_bg_<name>.nc
 """
 
@@ -24,7 +26,7 @@ from dameta.data.background import lagged_background  # noqa: E402
 from dameta.data.generate_v2 import DataConfigV2, generate_split_v2  # noqa: E402
 from dameta.dynamics import L63Model, L63Params  # noqa: E402
 from dameta.dynamics.emulator import L63Emulator  # noqa: E402
-from dameta.dynamics.models import build_model, load_registry  # noqa: E402
+from dameta.dynamics.models import build_model, load_registry, model_params  # noqa: E402
 
 OmegaConf.register_new_resolver("project_root", lambda: str(Path(__file__).resolve().parent.parent), replace=True)
 log = logging.getLogger(__name__)
@@ -48,6 +50,10 @@ def main(cfg: DictConfig) -> None:
     import torch
     torch.set_default_dtype(torch.float64)
     params, dcfg = L63Params(**cfg.l63), DataConfigV2(**cfg.data)
+    if cfg.get("truth_model", None):               # M8-R (2026-11-26): truth = registry model (e.g. f1 / f2)
+        params = model_params(cfg.truth_model, load_registry())
+        assert abs(params.dt - cfg.l63.dt) < 1e-15
+        log.info("truth model %s: %s", cfg.truth_model, params)
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     # feature flag (m7 model rectangle, 2026-11-20): backgrounds of the registry models (src/configs/models.yaml)
