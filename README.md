@@ -38,7 +38,8 @@ in every model (λ ≈ 0.89 /TU for L1, F1, E1; ≈ 1.00 /TU for F2, E2).
 
 Truth-free ensemble: members = M^τ(x_true(t₀ − τ) + ε), ε ~ N(0, 2 I), τ = 0.5 TU; error = member − the model's own
 unperturbed forecast. (a) 200 windows × 10 members, (b) one window × 1000 members. The four imperfect models grow
-errors like the truth and saturate after ~3–4 TU. (m7 setting: the shaded window is the earlier 0.6-TU window, σ_o² = 2.)
+errors like the truth and saturate after ~3–4 TU. Shaded: the 1.6-TU assimilation window; the σ_o line is the
+m7 perturbation level (σ² = 2).
 
 ![Ensemble error growth](docs/figures/models_error_growth.png)
 
@@ -63,6 +64,14 @@ inside J differ.
 | A1 | L1 | L1 | F1, F2 | misspecification |
 | A2 | F1 / F2 | F1 / F2 | E1 / E2 | emulator approximation alone |
 | B | L1 | L1 | E1, E2 | approximation + misspecification |
+
+**The scheme on one case** (truth L1, strong, L-BFGS, full obs, validation case 4). Each model assimilates the same
+9 observations (○) from the same first guess. Thick line: 4D-Var analysis over the window, then its forecast. Dashed:
+the same model's free forecast from the first guess (no assimilation). Black: truth. Top-right of each panel: error at
+t₀ (first guess → analysis) and forecast error 1 TU after the window. The first guess is the truth 5 steps late, so
+the free L1 run follows the truth with a small lag.
+
+![4D-Var scheme, one case](docs/figures/m8r_scheme_case4.png)
 
 **Results: smoke run, 10 validation cases (mean ± std), L-BFGS, full observations.** The 200-case test has not been
 run yet.
@@ -112,7 +121,7 @@ src/dameta/da/         cost.py (strong / weak / BPE), fourdvar.py, gradients.py
 src/dameta/meta/       learned optimizers (M4–M5)
 src/dameta/eval/       landscape.py (Hessian diagnostics), lyapunov.py
 src/                   run_4dvar_v2.py, estimate_b.py, select_q.py, report_rect_4dv.py, fig_rect_4dv.py,
-                       fig_models.py, fig_readme_models.py
+                       fig_models.py, fig_readme_models.py, fig_readme_4dvar.py
 src/scripts/           SLURM wrappers and command lists
 memory/                constitution, decisions, findings (main + memory/branches/<branch>/)
 docs/figures/          figures of this README
