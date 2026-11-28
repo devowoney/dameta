@@ -52,12 +52,12 @@ from dameta.dynamics.models import build_model, load_registry, model_params  # n
 torch.set_default_dtype(torch.float64)
 ROOT = Path(__file__).resolve().parent.parent
 NPZ = ROOT / "tmp/results/models/fig_models.npz"
-MODELS = ["l1", "f1", "f2", "e1", "e2"]
+MODELS = ["l1", "f1", "f2", "e1", "e2", "e1b", "e2b"]           # + bad emulators (pilot 2026-11-28)
 NAMES = {"l1": "L1", "f1": "F1", "f2": "F2", "e1": "E1", "e2": "E2"}
 # same validated palette as src/ensemble_models.py: F = blue family, E = orange family, level 2 darker; L1 neutral ink
 COL = {"l1": "#52514e", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a"}
 LS = {"l1": "-", "f1": "-", "f2": "-", "e1": "--", "e2": "--"}
-# bad emulators (pilot 2026-11-27): yellow-brown family, same level-2-darker rule; not in MODELS (rectangle figures)
+# bad emulators (pilot 2026-11-27): yellow-brown family, same level-2-darker rule
 NAMES.update({"e1b": "E1b", "e2b": "E2b"})
 COL.update({"e1b": "#d6a21e", "e2b": "#7a5a10"})
 LS.update({"e1b": ":", "e2b": ":"})
@@ -183,10 +183,11 @@ def window_band(ax):
 
 
 def fig_attractor(r, plt):
-    fig = plt.figure(figsize=(W2, 3.3))
-    gs = fig.add_gridspec(2, 3, width_ratios=[1.35, 1, 1], wspace=0.12, hspace=0.22)
+    fig = plt.figure(figsize=(W2, 2.9))
+    gs = fig.add_gridspec(2, 4, width_ratios=[1.35, 1, 1, 1], wspace=0.12, hspace=0.22)
     axes = {"l1": fig.add_subplot(gs[:, 0]), "f1": fig.add_subplot(gs[0, 1]), "e1": fig.add_subplot(gs[0, 2]),
-            "f2": fig.add_subplot(gs[1, 1]), "e2": fig.add_subplot(gs[1, 2])}
+            "e1b": fig.add_subplot(gs[0, 3]), "f2": fig.add_subplot(gs[1, 1]), "e2": fig.add_subplot(gs[1, 2]),
+            "e2b": fig.add_subplot(gs[1, 3])}
     ref = r["l1_attr"]
     allz = np.concatenate([r[f"{m}_attr"][:, 2] for m in MODELS])
     allx = np.concatenate([r[f"{m}_attr"][:, 0] for m in MODELS])
@@ -195,7 +196,8 @@ def fig_attractor(r, plt):
     sub = {"l1": "truth, θ = (10, 28, 8/3)",
            "f1": "θ = ({:.2f}, {:.2f}, {:.3f})".format(*th["f1"]),
            "f2": "θ = ({:.2f}, {:.2f}, {:.3f})".format(*th["f2"]),
-           "e1": "emulator of F1", "e2": "emulator of F2"}
+           "e1": "good emulator of F1", "e2": "good emulator of F2",
+           "e1b": "bad emulator of F1", "e2b": "bad emulator of F2"}
     for m, ax in axes.items():
         a = r[f"{m}_attr"]
         if m != "l1":
@@ -204,7 +206,7 @@ def fig_attractor(r, plt):
         ax.set(xlim=xl, ylim=zl)
         ax.grid(False)
         ax.set_title(f"$\\bf{{{NAMES[m]}}}$  {sub[m]}", loc="left", color=INK, fontsize=7, pad=2)
-        if m in ("l1", "f2", "e2"):
+        if m in ("l1", "f2", "e2", "e2b"):
             ax.set_xlabel("x", labelpad=1)
         else:
             ax.tick_params(labelbottom=False)
@@ -213,10 +215,10 @@ def fig_attractor(r, plt):
         else:
             ax.tick_params(labelleft=m in ("f1", "f2"))
     # rectangle axes: horizontal = emulation (Problem 2), vertical = physical misspecification (Problem 1)
-    b1, b2 = axes["f1"].get_position(), axes["e1"].get_position()
+    b1, b2 = axes["f1"].get_position(), axes["e1b"].get_position()
     fig.text((b1.x0 + b2.x1) / 2, b1.y1 + 0.075, "model → emulator  (emulation error)", fontsize=7, color=MUTED,
              ha="center")
-    b3 = axes["e2"].get_position()
+    b3 = axes["e2b"].get_position()
     fig.text(b3.x1 + 0.012, (b3.y0 + b2.y1) / 2, "mild → strong  (parameter misspecification)", fontsize=7,
              color=MUTED, ha="left", va="center", rotation=-90)
     fig.text(0.5, -0.03, f"x–z projection of a {r['l1_attr'].shape[0] * float(r['dt']) - float(r['dt']):g}-TU free run "
@@ -226,7 +228,7 @@ def fig_attractor(r, plt):
 
 
 def stats_band(ax, t, a, m, label=True):
-    """median line for every model; the 25-75 % band only for the L1 reference (bands of 5 models overlap)."""
+    """median line for every model; the 25-75 % band only for the L1 reference (bands of 7 models overlap)."""
     q25, q50, q75 = np.nanpercentile(a, [25, 50, 75], axis=0)
     if m == "l1":
         ax.fill_between(t, q25, q75, color=COL[m], alpha=0.15, lw=0, label="L1 25–75 %")
@@ -250,10 +252,11 @@ def fig_growth(r, plt, cfg):
         ax.set_title(title, loc="left")
     axs[0].set_ylabel("ensemble error |member − own control| (RMS)")
     axs[0].set_ylim(0.5, sat * 2.5)
-    axs[0].legend(loc="lower right", ncol=2, handlelength=2.2)
-    fig.text(0.5, -0.04, "line: median; grey band: L1 25–75 %; error measured against each model's own unperturbed forecast "
-             "(no truth)", fontsize=6, color=MUTED, ha="center")
+    h, lab = axs[0].get_legend_handles_labels()
     fig.tight_layout()
+    fig.legend(h, lab, loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=len(h), handlelength=2.2, columnspacing=1.2)
+    fig.text(0.5, -0.1, "line: median; grey band: L1 25–75 %; error measured against each model's own unperturbed forecast "
+             "(no truth)", fontsize=6, color=MUTED, ha="center")
     save(fig, "fig_models_growth")
     plt.close(fig)
 

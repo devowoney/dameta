@@ -6,39 +6,52 @@ solution, and (2) can a learned optimizer learn the geometry of that cost (earli
 
 ---
 
-## 1. Models: the model rectangle (branch `m7-model-rectangle`)
+## 1. Models: the model rectangle (branches `m7-model-rectangle`, `m8-classic-4dv`)
 
 ```
-            F1 ──(emulator approximation)──▶ E1        L1 = truth (observations, evaluation, reference)
+            F1 ──(emulator approximation)──▶ E1 (good), E1b (bad)      L1 = truth (observations, evaluation, reference)
             │  (physical misspecification)    │
-            F2 ──(emulator approximation)──▶ E2
+            F2 ──(emulator approximation)──▶ E2 (good), E2b (bad)
 ```
 
-| model | definition | one-interval model error* |
-|---|---|---|
-| **L1** | L63, σ = 10, ρ = 28, β = 8/3; RK4, Δt = 0.01, float64 | — (truth) |
-| **F1** | L63 with θ = θ_L ⊙ (1 + ε d), d = (1,1,1)/√3, ε = 3 % → (10.17, 28.48, 2.713) | 0.155 σ_o (vs L1) |
-| **F2** | same direction, ε = 18 % → (11.04, 30.91, 2.944) | 0.958 σ_o (vs L1) |
-| **E1 / E2** | MLP tendency (1 hidden layer × 8, SiLU) + RK4, trained on 10 F1 / F2 trajectories | 0.142 / 0.126 σ_o (vs teacher) |
+Each false model has two emulators: a good one (E1 / E2, alias E1g / E2g) and a bad one (E1b / E2b).
+Registry: `src/configs/models.yaml`.
 
-\*RMS of the error accumulated over one observation interval from the true state, / σ_o (pre-registered pick:
-F1 ≈ 0.15, F2 ≈ 1, emulators ≈ F1). The mild physical step and the emulator step are therefore of similar size.
+| model | definition | ref | m vs ref | w vs ref | m vs L1 | w vs L1 |
+|---|---|---|---|---|---|---|
+| **L1** | L63, σ = 10, ρ = 28, β = 8/3; RK4, Δt = 0.01, float64 | — | — | — | 0 | 0 |
+| **F1** | L63 with θ = θ_L ⊙ (1 + ε d), d = (1,1,1)/√3, ε = 3 % → (10.17, 28.48, 2.713) | L1 | 0.180 | 1.33 ± 1.48 | 0.180 | 1.33 ± 1.48 |
+| **F2** | same direction, ε = 18 % → (11.04, 30.91, 2.944) | L1 | 1.125 | 4.22 ± 1.65 | 1.125 | 4.22 ± 1.65 |
+| **E1** | MLP tendency (1 hidden layer × 8, SiLU) + RK4, 10 F1 training trajectories, 10k steps (`e1_d10w8d1`) | F1 | 0.170 | 0.97 ± 0.88 | 0.250 | 1.73 ± 1.30 |
+| **E2** | same setting, teacher F2 (`e2_d10w8d1`) | F2 | 0.167 | 0.86 ± 1.01 | 1.123 | 4.34 ± 1.56 |
+| **E1b** | MLP tendency (1 hidden layer × 6, SiLU) + RK4, 1 F1 training trajectory, 5k steps (`e1_d1w6d1s5000`) | F1 | 0.442 | 2.45 ± 1.41 | 0.480 | 2.36 ± 1.28 |
+| **E2b** | same setting, teacher F2 (`e2_d1w6d1s5000`) | F2 | 0.695 | 3.58 ± 1.74 | 1.302 | 4.23 ± 1.51 |
 
-All five models keep the butterfly attractor. F2 (and E2) has a visibly larger one.
+m = RMS error accumulated over one observation interval (20 steps) from the true state; w = RMS error over the 1.6-TU
+window from the true x₀ (mean ± std over cases); both / σ_o (σ_o = 2), 200 test cases. Ref = the model's own
+reference (L1 for F, the teacher for E). All seven models are stable over 20 TU. Sources: `src/model_quality.py`,
+`tmp/results/models/rectangle_table.md` in the m8 worktree.
+
+Selection: ε and the good-emulator setting were pre-registered on the m7 screen (F1 ≈ 0.15 σ_o, F2 ≈ 1 σ_o,
+good emulators ≈ F1), so the mild physical step and the good-emulator step are of similar size. The bad emulators
+target m ≈ 0.45 σ_o or w ≈ 3 σ_o vs the teacher (about 3× the good ones).
+
+All models except E2b keep the butterfly attractor; F2 (and E2) has a visibly larger one. E2b collapses onto a
+small loop on one wing.
 
 ![Attractors](docs/figures/models_attractor.png)
 
 **Same initial condition (a)** and **two initial conditions 10⁻³ apart (b).** From the same state, the models leave
-the truth inside or just after the 1.6-TU assimilation window. Two nearby states separate at the same exponential rate
-in every model (λ ≈ 0.89 /TU for L1, F1, E1; ≈ 1.00 /TU for F2, E2).
+the truth inside or just after the 1.6-TU assimilation window. Two nearby states separate at an exponential rate of
+λ ≈ 0.89 /TU for L1, F1, E1 and ≈ 1.00 /TU for F2, E2; the bad emulators are slower (E1b 0.78, E2b 0.68 /TU).
 
 ![Same IC and two ICs](docs/figures/models_behaviour.png)
 
-## 2. Error growth (branch `m7-model-rectangle`)
+## 2. Error growth (branches `m7-model-rectangle`, `m8-classic-4dv`)
 
 Truth-free ensemble: members = M^τ(x_true(t₀ − τ) + ε), ε ~ N(0, 2 I), τ = 0.5 TU; error = member − the model's own
-unperturbed forecast. (a) 200 windows × 10 members, (b) one window × 1000 members. The four imperfect models grow
-errors like the truth and saturate after ~3–4 TU. Shaded: the 1.6-TU assimilation window; the σ_o line is the
+unperturbed forecast. (a) 200 windows × 10 members, (b) one window × 1000 members. The imperfect models grow
+errors like the truth and saturate after ~3–4 TU, except E2b, which stays below saturation. Shaded: the 1.6-TU assimilation window; the σ_o line is the
 m7 perturbation level (σ² = 2).
 
 ![Ensemble error growth](docs/figures/models_error_growth.png)
@@ -117,7 +130,7 @@ L-BFGS path, first guess (■), analysis (●) and truth (★).
 | `m4-meta-b` | Meta-B learned optimizer: 7.4× fewer gradients than Adagrad, forecast +10 % |
 | `m5-meta-grid` | meta grid under model error; adjoint-structured learned gradient (cell 8a) ×2.3–2.9 wall-clock at equal quality; no learner beats L-BFGS |
 | `m7-model-rectangle` | five-model rectangle, emulator degradation screen, ensemble error growth (§1–2) |
-| `m8-classic-4dv` | classical 4D-Var on the rectangle, static B, χ²-tuned Q, Hessian diagnostics (§3) |
+| `m8-classic-4dv` | bad emulators E1b / E2b (§1); classical 4D-Var on the rectangle, static B, χ²-tuned Q, Hessian diagnostics (§3) |
 
 ## 5. Repository
 

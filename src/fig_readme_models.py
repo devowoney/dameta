@@ -1,5 +1,5 @@
 """
-README figure: behaviour of the five rectangle models (L1, F1, F2, E1, E2).
+README figure: behaviour of the seven rectangle models (L1, F1, F2, E1, E2, E1b, E2b).
 
     (a) same initial condition: x(t) of every model from the true state of test case 0
     (b) two initial conditions 1e-3 apart: |x(t) - x'(t)| per model, median and 25-75 % over the test cases,
@@ -21,10 +21,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dameta.dynamics.models import build_model, load_registry  # noqa: E402
 
 torch.set_default_dtype(torch.float64)
-MODELS = ["l1", "f1", "f2", "e1", "e2"]
-NAMES = {"l1": "L1 (truth)", "f1": "F1", "f2": "F2", "e1": "E1", "e2": "E2"}
-COL = {"l1": "#52514e", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a"}
-LS = {"l1": "-", "f1": "-", "f2": "-", "e1": "--", "e2": "--"}
+MODELS = ["l1", "f1", "f2", "e1", "e2", "e1b", "e2b"]
+NAMES = {"l1": "L1 (truth)", "f1": "F1", "f2": "F2", "e1": "E1", "e2": "E2", "e1b": "E1b", "e2b": "E2b"}
+COL = {"l1": "#52514e", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a", "e1b": "#d6a21e",
+       "e2b": "#7a5a10"}
+LS = {"l1": "-", "f1": "-", "f2": "-", "e1": "--", "e2": "--", "e1b": ":", "e2b": ":"}
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e6e5e0"
 WINDOW_TU = 1.6
 
@@ -88,7 +89,7 @@ def main():
                 zorder=3 if m == "l1" else 2)
     ax.set(xlabel="time [TU]", ylabel="x", xlim=(0, a.t_same),
            title=f"(a) same initial condition (test case {a.case})")
-    ax.legend(ncol=5, loc="upper left", bbox_to_anchor=(0, -0.2), fontsize=7)
+    ax.legend(ncol=7, loc="upper left", bbox_to_anchor=(0, -0.2), fontsize=7, handlelength=1.8, columnspacing=1.0)
     ax = axs[1]
     for m in MODELS:
         q = sep[m]

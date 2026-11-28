@@ -1,7 +1,7 @@
 """
 README figure: the 4D-Var scheme on the model rectangle, one case (truth L1, full observations, L-BFGS).
 
-One row per estimation model (L1 reference, F1, F2, E1, E2), x component:
+One row per estimation model (L1 reference, F1, F2, E1, E2, E1b, E2b), x component:
     truth, observations in the window, free forecast of the model from the shared first guess x_b (no assimilation),
     and the 4D-Var analysis trajectory (model run from x0_a) continued as a forecast.
 Trajectories are re-run with each model from the stored x0_b / x0_a (strong constraint: the window trajectory is the
@@ -22,10 +22,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from dameta.dynamics.models import build_model, load_registry  # noqa: E402
 
 torch.set_default_dtype(torch.float64)
-MODELS = ["l1", "f1", "f2", "e1", "e2"]
+MODELS = ["l1", "f1", "f2", "e1", "e2", "e1b", "e2b"]
 LABEL = {"l1": "L1 (perfect-model reference)", "f1": "F1 (mild misspecification)",
-         "f2": "F2 (strong misspecification)", "e1": "E1 (emulator of F1)", "e2": "E2 (emulator of F2)"}
-COL = {"l1": "#9a9994", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a"}
+         "f2": "F2 (strong misspecification)", "e1": "E1 (good emulator of F1)", "e2": "E2 (good emulator of F2)",
+         "e1b": "E1b (bad emulator of F1)", "e2b": "E2b (bad emulator of F2)"}
+COL = {"l1": "#9a9994", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a", "e1b": "#d6a21e",
+       "e2b": "#7a5a10"}
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e6e5e0"
 
 
@@ -80,8 +82,8 @@ def main():
         "axes.linewidth": 0.6, "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.5,
         "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False,
         "savefig.bbox": "tight", "savefig.pad_inches": 0.03, "mathtext.default": "regular"})
-    fig, axs = plt.subplots(len(MODELS), 1, figsize=(7.48, 7.2), sharex=True, sharey=True,
-                            gridspec_kw={"hspace": 0.42, "top": 0.93})
+    fig, axs = plt.subplots(len(MODELS), 1, figsize=(7.48, 10.0), sharex=True, sharey=True,
+                            gridspec_kw={"hspace": 0.42, "top": 0.95, "bottom": 0.06})
     v = a.var
     for ax, m in zip(axs, MODELS):
         rw = rows[m]
@@ -101,7 +103,7 @@ def main():
     axs[0].text(L * dt + 1.03, 0.06, "+1 TU", transform=axs[0].get_xaxis_transform(), fontsize=6.5, color=MUTED)
     axs[-1].set(xlabel="time [TU]", xlim=(0, t[-1]))
     h, lab = axs[0].get_legend_handles_labels()
-    fig.legend(h, lab, ncol=4, loc="lower center", bbox_to_anchor=(0.5, -0.01), fontsize=7)
+    fig.legend(h, lab, ncol=4, loc="lower center", bbox_to_anchor=(0.5, 0.0), fontsize=7)
     fig.suptitle(f"4D-Var ({a.scheme}, L-BFGS, full obs), truth L1, validation case {a.case}: "
                  "observations, analysis and forecast vs free forecast", fontsize=8, y=0.995)
     out = Path(a.out)
