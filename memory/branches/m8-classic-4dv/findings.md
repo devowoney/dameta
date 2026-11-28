@@ -299,3 +299,90 @@ The test split has 200 cases (smoke: 10 validation cases).
   tmp/results/m8r/<smoke|test>/<truth>/<model>/.
 - **Report and figures:** src/report_rect_4dv.py and src/fig_rect_4dv.py → tmp/results/m8r/rect_<sub>.{md,csv},
   rect_<sub>_delta.csv, and tmp/figs/m8r_{land,geom}_*.
+
+## Model rectangle — quantitative model quality and the bad emulator (2026-11-28)
+
+### 1. Purpose
+The rectangle varies two kinds of model error: physical misspecification (L1 → F1 → F2: wrong L63 parameters) and
+emulator approximation (F → E: an MLP surrogate of F). To compare both axes on one scale, every model's error is
+measured against a reference model in units of the observation-error standard deviation σ_o. Two numbers are used: a
+local one (one observation interval) and a window one (the whole assimilation window).
+
+### 2. Definitions
+Notation: M = the model being assessed, M_ref = its reference, M^n = n steps of M (RK4, Δt = 0.01). Reference:
+- the teacher (F1 or F2) for an emulator: approximation error alone;
+- L1 for any model: total error (approximation + misspecification). For F1 / F2 the two coincide.
+Assimilation setting of M8: window 1.6 TU (160 steps), observations every n_o = 20 steps at t_k = k n_o,
+k = 0..K−1 with K = 9, σ_o² = 4, full observations H = I.
+
+**Local (one-interval) error m.** From true states x on the truth trajectories,
+    δ(x) = M^{n_o}(x) − M_ref^{n_o}(x),
+    m(M; M_ref) = (1/σ_o) · √( (1/3) Σ_{v∈{x,y,z}} Var_x[δ_v(x)] ).
+- Samples x: the true states at the first K−1 = 8 observation times of each window, pooled over the 200 test cases
+  (1600 samples).
+- Var is the pooled variance, so a constant bias is not counted. This is the same statistic as the pre-registered ε
+  screen of F1 / F2 and the m_h screen of the emulators (branch m7), on the current data.
+- Meaning: the size of the model error that enters the weak-constraint 4D-Var each observation interval (its
+  natural Q scale), relative to the observation noise.
+
+**Window error w.** Both models run freely from the true initial state x0 of case i:
+    e_k = M^{t_k}(x0) − M_ref^{t_k}(x0),   k = 0..K−1,
+    w_i(M; M_ref) = (1/σ_o) · √( (1/(3K)) Σ_k |e_k|² ),
+reported as mean ± std over the 200 test cases. The sum includes t_0, where e_0 = 0.
+- Link to the 4D-Var cost: with y_k = x_true(t_k) + ε_k, ε_k ~ N(0, σ_o² I), and M_ref = the truth model,
+      J_o(x0) = ½ Σ_k |y_k − M^{t_k}(x0)|² / σ_o²   ⇒   E[2 J_o(x0_true)] = p (1 + w²),   p = 3K = 27.
+  So w² is the excess normalised observation misfit that the model produces from the true state. Strong-constraint
+  4D-Var must absorb it by moving x0 away from the truth. w < 1: the model error over the window is below the
+  observation noise. w > 1: it is detectable from the observations of one window.
+- Unlike m, w includes the chaotic growth of the error over the window, and bias.
+
+Both are computed by src/model_quality.py (test split, D1 v2, seed 42).
+
+### 3. Results for the rectangle (test, 200 cases)
+
+| model | definition | setting | ref | m vs ref | w vs ref | m vs L1 | w vs L1 | share w_L1 > 1 |
+|---|---|---|---|---|---|---|---|---|
+| L1 | L63, θ_L = (10, 28, 8/3) | — | — | 0 | 0 | 0 | 0 | 0 |
+| F1 | θ_L ⊙ (1 + ε d), ε = 0.03, d = (1,1,1)/√3 | (10.1732, 28.4850, 2.7129), +1.73 % each | L1 | 0.180 | 1.33 ± 1.48 | 0.180 | 1.33 ± 1.48 | 0.40 |
+| F2 | same, ε = 0.18 | (11.0392, 30.9098, 2.9438), +10.39 % each | L1 | 1.125 | 4.22 ± 1.65 | 1.125 | 4.22 ± 1.65 | 0.99 |
+| E1 (good) | MLP tendency + RK4, teacher F1 | 10 train ICs, MLP 1 × 8, 10 000 steps | F1 | 0.170 | 0.97 ± 0.88 | 0.250 | 1.73 ± 1.30 | 0.70 |
+| E2 (good) | same, teacher F2 | same | F2 | 0.167 | 0.86 ± 1.01 | 1.123 | 4.34 ± 1.56 | 1.00 |
+| E1b (bad) | same, teacher F1 | 1 train IC, MLP 1 × 6, 5 000 steps | F1 | 0.442 | 2.45 ± 1.41 | 0.480 | 2.36 ± 1.28 | 0.86 |
+| E2b (bad) | same, teacher F2 | same | F2 | 0.695 | 3.58 ± 1.74 | 1.302 | 4.23 ± 1.51 | 1.00 |
+
+All seven models are stable over 20 TU (50 test ICs, |x| < 100). On the current data F1 / F2 have m = 0.180 / 1.125;
+the screen values 0.155 / 0.958 (m7) were on the earlier data (window 1.1 TU, obs every 10 steps, σ_o² = 2).
+Source: tmp/results/models/quality_test_rect.{json,md}, rectangle_table.md (job 84592).
+
+### 4. Bad emulator: definition and selection
+- Target (pilot): about 3 × the good emulator's error vs its teacher, i.e. m ≈ 0.45 (good 0.17), or w ≈ 3
+  (good ≈ 0.9).
+- Candidates: the good recipe (multi-step rollout loss, 1 → 10-step curriculum, Adam 1e-3 → 1e-5 cosine, best
+  validation checkpoint) degraded by 1 training IC, one hidden layer, width 2–6 and 1 000–10 000 training steps;
+  16 new emulators (8 per teacher) plus the earlier d1w6d1, d3w4d1 and d3w6d1.
+- Screen (tmp/results/models/quality_test_badscreen.md), m / w vs teacher:
+
+| setting | E1: m | E1: w | E2: m | E2: w | note |
+|---|---|---|---|---|---|
+| d1w6d1 (10k steps, previous bad) | 0.330 | 1.88 | 0.358 | 1.84 | |
+| d1w6d1s5000 (5k steps) | 0.442 | 2.45 | 0.695 | 3.58 | **picked** |
+| d1w5d1 | 0.393 | 2.51 | 0.609 | 3.67 | |
+| d1w6d1s3000 | 0.601 | 2.75 | 0.844 | 3.76 | |
+| d1w6d1s2000 | 0.950 | 3.15 | 1.141 | 3.80 | |
+| d1w3d1, d1w4d1 | 1.6–2.7 | 5.0–6.1 | | | too degraded |
+| d1w2d1, d1w6d1s1000 (F1), d3w4d1 (F1) | | | | | unstable over 20 TU |
+
+- Pick (pilot, after the screen and the diagnostic figures tmp/figs/m8emu_*_d1w6d1s5000.png): d1w6d1s5000 for both
+  teachers (one setting for F1 and F2, as for the good emulators). It meets the m target
+  on F1 (0.44); on F2 the same setting gives m = 0.70.
+- Diagnostics vs teacher (fig_emulator_ics): one-interval |error| / σ_o median (95 %) E1b 0.56 (1.40), E2b 0.72 (2.22)
+  vs good 0.22 (0.57) / 0.23 (0.56); median |error| at 1.6 TU from the same test IC E1b 10.2, E2b 17.3 vs good 3.7 /
+  3.0.
+- Files: tmp/emulators/e{1,2}_d1w6d1s5000.pt; src/configs/models.yaml e1b / e2b.
+
+### 5. Consequences for M8-R
+- Q re-tuned for E1b / E2b with the same χ² rule (92 runs, select_q): truth L1 0.316 / 3.16 (unchanged), truth F1
+  E1b 1.0 (was 0.562), truth F2 E2b 0.562 (was 0.1); no edge pick, no diverged case.
+- Smoke rerun (64 runs, 10 val cases): 0 diverged; tmp/results/m8r/rect_smoke.{md,csv}; README rows updated.
+- Previous bad-emulator (d1w6d1) results archived in tmp/results/m8r_d1w6d1/, tmp/figs/m8r_d1w6d1/,
+  <data>/q_chi2_seed42_d1w6d1.json.

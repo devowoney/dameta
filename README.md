@@ -65,7 +65,7 @@ inside J differ.
 | A2 | F1 / F2 | F1 / F2 | E1, E1b / E2, E2b | emulator approximation alone |
 | B | L1 | L1 | E1, E2, E1b, E2b | approximation + misspecification |
 
-E1 / E2 = good emulators (E1g / E2g); E1b / E2b = bad emulators (1 training IC, MLP 1 × 6, `e*_d1w6d1`), same
+E1 / E2 = good emulators (E1g / E2g); E1b / E2b = bad emulators (1 training IC, MLP 1 × 6, 5000 training steps, `e*_d1w6d1s5000`), same
 configuration (shared first guess and B, χ²-tuned Q, E1 / E2 learning rates).
 
 **The scheme on one case** (truth L1, strong, L-BFGS, full obs, validation case 4). Each model assimilates the same
@@ -86,14 +86,14 @@ run yet.
 | A1 | L1 | F2 | 5.58 ± 3.3 | 2.41 ± 0.53 | 8.86 ± 4.9 | 5.00 ± 2.0 | 20 |
 | B | L1 | E1 | 2.55 ± 0.98 | 2.38 ± 0.86 | 2.41 ± 1.5 | 2.17 ± 1.5 | 22 |
 | B | L1 | E2 | 6.06 ± 3.3 | 2.43 ± 0.63 | 9.28 ± 5.8 | 5.49 ± 2.2 | 26 |
-| B | L1 | E1b | 2.96 ± 0.86 | 2.44 ± 0.61 | 2.85 ± 1.6 | 2.20 ± 1.3 | 24 |
-| B | L1 | E2b | 6.73 ± 3.6 | 2.63 ± 0.83 | 8.61 ± 4.2 | 6.98 ± 2.9 | 18 |
+| B | L1 | E1b | 3.22 ± 1.2 | 2.68 ± 0.84 | 3.15 ± 1.5 | 2.27 ± 1.3 | 23 |
+| B | L1 | E2b | 5.99 ± 3.2 | 2.77 ± 0.87 | 6.94 ± 4.3 | 5.66 ± 4.1 | 32 |
 | ref | F1 | F1 | 1.51 ± 0.68 | — | 3.31 ± 4.6 | — | 21 |
 | A2 | F1 | E1 | 1.65 ± 0.74 | 1.57 ± 0.77 | 5.24 ± 6.8 | 4.94 ± 6.6 | 21 |
-| A2 | F1 | E1b | 2.19 ± 0.62 | 1.90 ± 0.47 | 5.15 ± 6.4 | 4.48 ± 5.3 | 25 |
+| A2 | F1 | E1b | 2.64 ± 0.76 | 2.00 ± 0.55 | 7.07 ± 6.5 | 4.88 ± 5.2 | 27 |
 | ref | F2 | F2 | 1.43 ± 0.70 | — | 4.73 ± 6.2 | — | 27 |
 | A2 | F2 | E2 | 1.45 ± 0.70 | 1.61 ± 0.62 | 5.46 ± 6.1 | 5.79 ± 6.8 | 28 |
-| A2 | F2 | E2b | 2.29 ± 1.4 | 2.17 ± 1.0 | 5.57 ± 5.9 | 7.98 ± 8.9 | 30 |
+| A2 | F2 | E2b | 4.31 ± 2.3 | 2.27 ± 1.1 | 7.59 ± 6.0 | 16.5 ± 5.8 | 27 |
 
 IC error = |x_a(0) − x_true(0)|; forecasts are run with the estimation model. All tables (all optimizers, x-only,
 paired Δ): `tmp/results/m8r/rect_smoke.md` in the m8 worktree.

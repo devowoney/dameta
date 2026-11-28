@@ -20,7 +20,7 @@ models:
   f2: {kind: l63, eps: "${eps2}"}
   e1: {kind: emulator, file: e1_d10w8d1, teacher: f1}   # degraded: 10 train ICs, MLP 1 x 8 (m_h 0.142; pilot 2026-11-23)
   e2: {kind: emulator, file: e2_d10w8d1, teacher: f2}   # same setting (m_h 0.126); well-trained e1.pt / e2.pt kept
-  e1b: {kind: emulator, file: e1_d1w6d1, teacher: f1}   # BAD emulator (pilot 2026-11-27): 1 train IC, MLP 1 x 6
-  e2b: {kind: emulator, file: e2_d1w6d1, teacher: f2}   # same setting (screen: src/fig_emulator_ics.py, tmp/figs/m8emu_*)
+  e1b: {kind: emulator, file: e1_d1w6d1s5000, teacher: f1}   # BAD emulator (pilot 2026-11-28): 1 train IC, MLP 1 x 6,
+  e2b: {kind: emulator, file: e2_d1w6d1s5000, teacher: f2}   # 5000 train steps; m vs teacher 0.44 / 0.70 (was d1w6d1, 11-27)
 
 aliases: {truth: l1, e1g: e1, e2g: e2}   # truth: v2 name; e1g / e2g = GOOD emulators (pilot 2026-11-27)
