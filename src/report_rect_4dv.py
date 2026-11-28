@@ -30,8 +30,9 @@ from m8_lists import METHODS, PATTERNS, STAGES  # noqa: E402
 METRICS = ("sol_deg", "traj_deg", "fc1", "lam_min_a", "lam_max_a", "kappa_H_a", "n_neg_a", "cos_truth_a",
            "nonpd_it", "cos_it", "evals")
 SHOW = ("sol_deg", "traj_deg", "fc1", "lam_min_a", "kappa_H_a", "nonpd_it", "cos_it", "evals")
-PAIRS = {"L1": [("f1", "l1"), ("f2", "l1"), ("e1", "l1"), ("e2", "l1"), ("e1", "f1"), ("e2", "f2")],
-         "F1": [("e1", "f1")], "F2": [("e2", "f2")]}
+PAIRS = {"L1": [("f1", "l1"), ("f2", "l1"), ("e1", "l1"), ("e2", "l1"), ("e1", "f1"), ("e2", "f2"),
+                ("e1b", "l1"), ("e2b", "l1"), ("e1b", "f1"), ("e2b", "f2")],
+         "F1": [("e1", "f1"), ("e1b", "f1")], "F2": [("e2", "f2"), ("e2b", "f2")]}   # e1b / e2b: bad emulators
 
 
 def per_case(f: Path) -> pd.DataFrame:

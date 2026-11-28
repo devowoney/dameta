@@ -62,8 +62,11 @@ inside J differ.
 | stage | truth = obs | reference (strong) | tested (strong + weak) | isolates |
 |---|---|---|---|---|
 | A1 | L1 | L1 | F1, F2 | misspecification |
-| A2 | F1 / F2 | F1 / F2 | E1 / E2 | emulator approximation alone |
-| B | L1 | L1 | E1, E2 | approximation + misspecification |
+| A2 | F1 / F2 | F1 / F2 | E1, E1b / E2, E2b | emulator approximation alone |
+| B | L1 | L1 | E1, E2, E1b, E2b | approximation + misspecification |
+
+E1 / E2 = good emulators (E1g / E2g); E1b / E2b = bad emulators (1 training IC, MLP 1 × 6, `e*_d1w6d1`), same
+configuration (shared first guess and B, χ²-tuned Q, E1 / E2 learning rates).
 
 **The scheme on one case** (truth L1, strong, L-BFGS, full obs, validation case 4). Each model assimilates the same
 9 observations (○) from the same first guess. Thick line: 4D-Var analysis over the window, then its forecast. Dashed:
@@ -83,10 +86,14 @@ run yet.
 | A1 | L1 | F2 | 5.58 ± 3.3 | 2.41 ± 0.53 | 8.86 ± 4.9 | 5.00 ± 2.0 | 20 |
 | B | L1 | E1 | 2.55 ± 0.98 | 2.38 ± 0.86 | 2.41 ± 1.5 | 2.17 ± 1.5 | 22 |
 | B | L1 | E2 | 6.06 ± 3.3 | 2.43 ± 0.63 | 9.28 ± 5.8 | 5.49 ± 2.2 | 26 |
+| B | L1 | E1b | 2.96 ± 0.86 | 2.44 ± 0.61 | 2.85 ± 1.6 | 2.20 ± 1.3 | 24 |
+| B | L1 | E2b | 6.73 ± 3.6 | 2.63 ± 0.83 | 8.61 ± 4.2 | 6.98 ± 2.9 | 18 |
 | ref | F1 | F1 | 1.51 ± 0.68 | — | 3.31 ± 4.6 | — | 21 |
 | A2 | F1 | E1 | 1.65 ± 0.74 | 1.57 ± 0.77 | 5.24 ± 6.8 | 4.94 ± 6.6 | 21 |
+| A2 | F1 | E1b | 2.19 ± 0.62 | 1.90 ± 0.47 | 5.15 ± 6.4 | 4.48 ± 5.3 | 25 |
 | ref | F2 | F2 | 1.43 ± 0.70 | — | 4.73 ± 6.2 | — | 27 |
 | A2 | F2 | E2 | 1.45 ± 0.70 | 1.61 ± 0.62 | 5.46 ± 6.1 | 5.79 ± 6.8 | 28 |
+| A2 | F2 | E2b | 2.29 ± 1.4 | 2.17 ± 1.0 | 5.57 ± 5.9 | 7.98 ± 8.9 | 30 |
 
 IC error = |x_a(0) − x_true(0)|; forecasts are run with the estimation model. All tables (all optimizers, x-only,
 paired Δ): `tmp/results/m8r/rect_smoke.md` in the m8 worktree.

@@ -57,6 +57,10 @@ NAMES = {"l1": "L1", "f1": "F1", "f2": "F2", "e1": "E1", "e2": "E2"}
 # same validated palette as src/ensemble_models.py: F = blue family, E = orange family, level 2 darker; L1 neutral ink
 COL = {"l1": "#52514e", "f1": "#5598e7", "f2": "#184f95", "e1": "#eb6834", "e2": "#a8431a"}
 LS = {"l1": "-", "f1": "-", "f2": "-", "e1": "--", "e2": "--"}
+# bad emulators (pilot 2026-11-27): yellow-brown family, same level-2-darker rule; not in MODELS (rectangle figures)
+NAMES.update({"e1b": "E1b", "e2b": "E2b"})
+COL.update({"e1b": "#d6a21e", "e2b": "#7a5a10"})
+LS.update({"e1b": ":", "e2b": ":"})
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e6e5e0"
 WINDOW_TU = 0.6                                                  # Pearson decorrelation (pilot 2026-11-24); --window-tu
 SIGMA_O = np.sqrt(2.0)

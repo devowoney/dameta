@@ -34,9 +34,12 @@ BINFL = (1.0, 4.0, 16.0)
 WINDOWS = {60: "tmp/data_w60", 100: "tmp/data_w100", 160: "tmp/data"}    # feasibility of longer windows (2026-11-25);
                                                                            # 1.6 TU = tmp/data since 2026-11-26
 # M8-R stages: truth tag -> (data dir, shared background = truth model, reference, imperfect models)
-STAGES = {"L1": ("tmp/data", "l1", "l1", ("f1", "f2", "e1", "e2")),
-          "F1": ("tmp/data_tF1", "f1", "f1", ("e1",)),
-          "F2": ("tmp/data_tF2", "f2", "f2", ("e2",))}
+STAGES = {"L1": ("tmp/data", "l1", "l1", ("f1", "f2", "e1", "e2", "e1b", "e2b")),
+          "F1": ("tmp/data_tF1", "f1", "f1", ("e1", "e1b")),
+          "F2": ("tmp/data_tF2", "f2", "f2", ("e2", "e2b"))}
+# e1 / e2 = GOOD emulators (E1g / E2g), e1b / e2b = BAD emulators (pilot 2026-11-27); lr of a model without its own
+# sweep: reference L1 -> F1's lr, bad emulators -> their good emulator's lr (same configuration, no new sweep)
+LR_MODEL = {"l1": "f1", "e1b": "e1", "e2b": "e2"}
 Q_GRID = [round(10 ** (e / 4), 6) for e in range(-12, 9)]                 # 1e-3 .. 1e2, 0.25 decade (21 values)
 Q_EXTRA = {"L1": [round(10 ** (e / 4), 6) for e in range(9, 13)]}          # edge extension to 1e3 (pilot 2026-11-26:
                                                                           # F2 picked q = 100 on the grid edge)
@@ -59,9 +62,17 @@ def write(lines, name, n_jobs):
 
 
 def main():
-    mode = sys.argv[1]
-    n_jobs = int(sys.argv[2]) if len(sys.argv) > 2 else 12
-    n_cases = int(sys.argv[3]) if len(sys.argv) > 3 else None
+    argv = list(sys.argv)
+    only, sfx = None, ""
+    if "--only" in argv:                              # e.g. --only e1b,e2b: lines for these models only
+        i = argv.index("--only")
+        only = set(argv[i + 1].split(","))
+        sfx = "_" + "_".join(sorted(only))
+        del argv[i:i + 2]
+    keep = lambda m: only is None or m in only        # noqa: E731
+    mode = argv[1]
+    n_jobs = int(argv[2]) if len(argv) > 2 else 12
+    n_cases = int(argv[3]) if len(argv) > 3 else None
     if mode == "smoke":
         lines = ["python src/tests/test_landscape.py > tmp/logs/m8/test_landscape.log 2>&1",
                  "python src/tests/test_models.py > tmp/logs/m8/test_models.log 2>&1"]
@@ -128,13 +139,13 @@ def main():
     elif mode in ("qtune", "qtune_extra"):
         lines = []
         for tag, (ddir, bg, _, models) in STAGES.items():
-            for m in models:
+            for m in filter(keep, models):
                 for q in (Q_EXTRA.get(tag, []) if mode == "qtune_extra" else Q_GRID):
                     lines.append(line(m, "weak", "full", "lbfgs_wolfe", 1.0, "train",
                                       f"tmp/results/m8r/qtune/{tag}/q{q:g}", f"m8r_qtune_{tag}_q{q:g}",
                                       f"data_dir=${{PWD}}/{ddir} background={bg} background_cov=static cost.q=null "
                                       f"cost.sigma_q={q ** 0.5:.10g} n_cases=50"))
-        write(lines, f"m8r_{mode}", n_jobs)
+        write(lines, f"m8r_{mode}{sfx}", n_jobs)
     elif mode in ("rect", "rect_smoke"):
         smoke = mode == "rect_smoke"
         sel = json.loads((ROOT / "tmp/results/m8/selected_lr.json").read_text())
@@ -142,8 +153,8 @@ def main():
         lines = []
         for tag, (ddir, bg, ref, models) in STAGES.items():
             qj = json.loads((ROOT / ddir / "q_chi2_seed42.json").read_text())
-            for m in (ref,) + models:
-                lr_model = "f1" if m == "l1" else m                        # reference L1: F1's lr (no new sweep)
+            for m in filter(keep, (ref,) + models):
+                lr_model = LR_MODEL.get(m, m)                              # no own sweep: see LR_MODEL
                 for c in (("strong",) if m == ref else CONSTRAINTS):       # perfect-model reference: strong only
                     qx = f" cost.sigma_q={qj[m]['q'] ** 0.5:.10g}" if c == "weak" else ""
                     for p in PATTERNS:
@@ -153,7 +164,7 @@ def main():
                                               f"m8r_{sub}_{tag}",
                                               f"data_dir=${{PWD}}/{ddir} background={bg} background_cov=static "
                                               f"cost.q=null{qx} {cases}landscape_iter=true"))
-        write(lines, f"m8r_{'smoke' if smoke else 'test'}", n_jobs)
+        write(lines, f"m8r_{'smoke' if smoke else 'test'}{sfx}", n_jobs)
     else:
         raise ValueError(mode)
 
